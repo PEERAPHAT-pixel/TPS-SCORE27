@@ -7,6 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- html2canvas Library for Exporting Match Score as PNG Image -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <!-- Google Fonts (Kanit & Inter) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -479,21 +481,25 @@
                     ? `<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">จบการแข่งขัน</span>`
                     : `<span class="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">${match.time || 'ยังไม่เริ่ม'}</span>`;
 
+                const matchSport = escapeHtml(match.sport || 'แมตช์การแข่งขัน');
+                const t1Name = escapeHtml(match.team1?.name || 'ทีม 1');
+                const t2Name = escapeHtml(match.team2?.name || 'ทีม 2');
+
                 return `
-                    <div class="glass-panel rounded-2xl p-5 border border-slate-800 shadow-xl relative transition-all hover:border-slate-700">
+                    <div id="match-card-${match.id}" class="glass-panel rounded-2xl p-5 border border-slate-800 shadow-xl relative transition-all hover:border-slate-700">
                         <!-- Top Header -->
                         <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-800/80">
                             <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
                                 <i class="fa-solid fa-dumbbell text-blue-500"></i>
-                                ${escapeHtml(match.sport || 'แมตช์การแข่งขัน')}
+                                ${matchSport}
                             </span>
                             <div class="flex items-center gap-2">
                                 ${statusBadge}
                                 ${isAdmin ? `
-                                    <button onclick="openMatchModal('${match.id}')" class="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-amber-400 text-xs transition" title="แก้ไข">
+                                    <button onclick="openMatchModal('${match.id}')" class="capture-hide p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-amber-400 text-xs transition" title="แก้ไข">
                                         <i class="fa-solid fa-pen-to-square"></i>
                                     </button>
-                                    <button onclick="deleteMatch('${match.id}')" class="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-rose-400 text-xs transition" title="ลบ">
+                                    <button onclick="deleteMatch('${match.id}')" class="capture-hide p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-rose-400 text-xs transition" title="ลบ">
                                         <i class="fa-solid fa-trash"></i>
                                     </button>
                                 ` : ''}
@@ -507,14 +513,14 @@
                                 <img src="${escapeHtml(match.team1?.logo || getFallbackImage(match.team1?.name))}" 
                                      onerror="this.src='${getFallbackImage(match.team1?.name)}'" 
                                      class="w-14 h-14 object-cover rounded-xl border border-slate-700/60 shadow-md mb-2 bg-slate-900">
-                                <span class="font-bold text-sm text-white line-clamp-1">${escapeHtml(match.team1?.name || 'ทีม 1')}</span>
+                                <span class="font-bold text-sm text-white line-clamp-1">${t1Name}</span>
                             </div>
 
                             <!-- Score Center -->
                             <div class="col-span-1 flex flex-col items-center justify-center">
                                 ${isAdmin ? `
                                     <!-- Quick Admin Score Inputs -->
-                                    <div class="flex flex-col items-center gap-1">
+                                    <div class="flex flex-col items-center gap-1 capture-hide">
                                         <input type="number" min="0" value="${match.team1?.score ?? 0}" 
                                                onchange="quickUpdateScore('${match.id}', 'team1', this.value)" 
                                                class="w-12 text-center bg-slate-900 border border-slate-700 rounded py-0.5 text-sm font-bold text-blue-400 focus:outline-none focus:border-amber-400">
@@ -522,6 +528,9 @@
                                         <input type="number" min="0" value="${match.team2?.score ?? 0}" 
                                                onchange="quickUpdateScore('${match.id}', 'team2', this.value)" 
                                                class="w-12 text-center bg-slate-900 border border-slate-700 rounded py-0.5 text-sm font-bold text-rose-400 focus:outline-none focus:border-amber-400">
+                                    </div>
+                                    <div class="hidden capture-show text-2xl font-black text-white tracking-widest">
+                                        <span>${match.team1?.score ?? 0}</span> : <span>${match.team2?.score ?? 0}</span>
                                     </div>
                                 ` : `
                                     <div class="text-2xl font-black text-white tracking-widest flex items-center gap-1">
@@ -537,114 +546,330 @@
                                 <img src="${escapeHtml(match.team2?.logo || getFallbackImage(match.team2?.name))}" 
                                      onerror="this.src='${getFallbackImage(match.team2?.name)}'" 
                                      class="w-14 h-14 object-cover rounded-xl border border-slate-700/60 shadow-md mb-2 bg-slate-900">
-                                <span class="font-bold text-sm text-white line-clamp-1">${escapeHtml(match.team2?.name || 'ทีม 2')}</span>
+                                <span class="font-bold text-sm text-white line-clamp-1">${t2Name}</span>
                             </div>
                         </div>
 
-                        <!-- Footer Info -->
-                        <div class="mt-3 pt-2 text-center border-t border-slate-800/40">
+                        <!-- Footer Info & Download Button -->
+                        <div class="mt-3 pt-2 flex justify-between items-center border-t border-slate-800/40">
                             <span class="text-[11px] text-slate-500">
                                 <i class="fa-regular fa-clock mr-1"></i> ${escapeHtml(match.time || 'ไม่ระบุเวลา')}
                             </span>
+                            <button onclick="downloadMatchCardImage('${match.id}', '${matchSport}', '${t1Name}', '${t2Name}')" 
+                                    class="capture-hide text-[11px] px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg border border-slate-700/60 transition flex items-center gap-1.5">
+                                <i class="fa-solid fa-download text-emerald-400"></i>
+                                บันทึกเป็นรูปภาพ
+                            </button>
                         </div>
                     </div>
                 `;
             }).join('');
         };
-
-        window.renderStandings = function() {
-            const tbody = document.getElementById('standingsTableBody');
-            if (!tbody) return;
-
-            const isAdmin = window.appState.isAdmin;
-            document.getElementById('adminTableCol').classList.toggle('hidden', !isAdmin);
-
-            // Sort team by points descending
-            const standings = [...window.appState.standings].sort((a, b) => (b.points || 0) - (a.points || 0));
-
-            if (standings.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="${isAdmin ? 8 : 7}" class="py-12 text-center text-slate-500">
-                            <i class="fa-solid fa-users-slash text-2xl mb-2 text-slate-600 block"></i>
-                            <span class="font-medium text-slate-300 block mb-1">ยังไม่มีข้อมูลทีมในตารางคะแนน</span>
-                            <span class="text-xs text-slate-500">ผู้ดูแลระบบสามารถเข้าสู่ระบบ Admin เพื่อกด "เพิ่มทีม" ได้ทันที</span>
-                        </td>
-                    </tr>
-                `;
-                return;
-            }
-
-            const maxPointsPossible = Math.max(...standings.map(s => s.points || 0), 1);
-
-            tbody.innerHTML = standings.map((team, index) => {
-                const rank = index + 1;
-                let rankBadge = `<span class="text-slate-400 font-semibold">${rank}</span>`;
+    <!-- MODAL 2: Add/Edit Match Modal -->
+    <div id="matchModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4 overflow-y-auto">
+        <div class="glass-panel max-w-lg w-full p-6 rounded-2xl border border-slate-700 shadow-2xl relative my-8">
+            <button onclick="closeMatchModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+            <h3 id="matchModalTitle" class="text-lg font-bold text-white mb-4">เพิ่มข้อมูลการแข่งขัน</h3>
+            
+            <form onsubmit="saveMatch(event)" class="space-y-4">
+                <input type="hidden" id="matchFormId">
                 
-                if (rank === 1) rankBadge = `<div class="w-7 h-7 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs mx-auto border border-amber-500/40">1</div>`;
-                if (rank === 2) rankBadge = `<div class="w-7 h-7 rounded-full bg-slate-300/20 text-slate-200 flex items-center justify-center font-bold text-xs mx-auto border border-slate-400/40">2</div>`;
-                if (rank === 3) rankBadge = `<div class="w-7 h-7 rounded-full bg-amber-700/20 text-amber-600 flex items-center justify-center font-bold text-xs mx-auto border border-amber-700/40">3</div>`;
+                <div>
+                    <label class="block text-xs text-slate-300 mb-1">ประเภทกีฬา</label>
+                    <input type="text" id="matchSport" required placeholder="เช่น ฟุตบอล, บาสเกตบอล" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                </div>
 
-                // Calculate Medal Probability Projection
-                const points = team.points || 0;
-                let medalProbHtml = '';
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">สถานะ</label>
+                        <select id="matchStatus" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                            <option value="UPCOMING">ยังไม่แข่งขัน</option>
+                            <option value="LIVE">กำลังแข่งขัน (LIVE)</option>
+                            <option value="FINISHED">จบการแข่งขัน</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">เวลาแข่งขัน</label>
+                        <input type="text" id="matchTime" placeholder="เช่น วันนี้ 18:00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                    </div>
+                </div>
 
-                if (rank === 1) {
-                    medalProbHtml = `
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                            <i class="fa-solid fa-medal text-amber-400"></i> ตัวเต็งเหรียญทอง (90%+)
-                        </span>
-                    `;
-                } else if (rank === 2) {
-                    medalProbHtml = `
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-300/10 text-slate-300 border border-slate-400/30">
-                            <i class="fa-solid fa-medal text-slate-300"></i> ตัวเต็งเหรียญเงิน (75%+)
-                        </span>
-                    `;
-                } else if (rank === 3) {
-                    medalProbHtml = `
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-800/20 text-amber-500 border border-amber-700/30">
-                            <i class="fa-solid fa-medal text-amber-600"></i> ตัวเต็งเหรียญทองแดง (60%+)
-                        </span>
-                    `;
-                } else {
-                    const chance = Math.max(10, Math.round((points / maxPointsPossible) * 50));
-                    medalProbHtml = `
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-400">
-                            โอกาสเหรียญ ${chance}%
-                        </span>
-                    `;
+                <!-- Team 1 Input Group -->
+                <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800 space-y-3">
+                    <span class="text-xs font-semibold text-blue-400 block">ทีมที่ 1 (เจ้าบ้าน/ฝั่งซ้าย)</span>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="col-span-2">
+                            <input type="text" id="team1Name" required placeholder="ชื่อทีม 1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                        </div>
+                        <div>
+                            <input type="number" id="team1Score" value="0" min="0" placeholder="คะแนน" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white text-center">
+                        </div>
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="block text-[11px] text-slate-400">แนบไฟล์รูปภาพโลโก้ทีม (ไม่เกิน 10MB):</label>
+                        <input type="file" id="team1FileInput" accept="image/*" class="w-full text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700">
+                        <input type="url" id="team1Logo" placeholder="หรือวาง URL รูปภาพโลโก้" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+                </div>
+
+                <!-- Team 2 Input Group -->
+                <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800 space-y-3">
+                    <span class="text-xs font-semibold text-rose-400 block">ทีมที่ 2 (ทีมเยือน/ฝั่งขวา)</span>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="col-span-2">
+                            <input type="text" id="team2Name" required placeholder="ชื่อทีม 2" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                        </div>
+                        <div>
+                            <input type="number" id="team2Score" value="0" min="0" placeholder="คะแนน" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white text-center">
+                        </div>
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="block text-[11px] text-slate-400">แนบไฟล์รูปภาพโลโก้ทีม (ไม่เกิน 10MB):</label>
+                        <input type="file" id="team2FileInput" accept="image/*" class="w-full text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700">
+                        <input type="url" id="team2Logo" placeholder="หรือวาง URL รูปภาพโลโก้" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeMatchModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium">ยกเลิก</button>
+                    <button type="submit" id="saveMatchSubmitBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium flex items-center gap-2">
+                        <i class="fa-solid fa-floppy-disk"></i> บันทึกข้อมูล
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 3: Add/Edit Team Modal -->
+    <div id="teamModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-panel max-w-md w-full p-6 rounded-2xl border border-slate-700 shadow-2xl relative">
+            <button onclick="closeTeamModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+            <h3 class="text-lg font-bold text-white mb-4">จัดการทีมในตารางสรุปคะแนน</h3>
+            
+            <form onsubmit="saveTeamStandings(event)" class="space-y-3">
+                <input type="hidden" id="teamFormId">
+                <div>
+                    <label class="block text-xs text-slate-300 mb-1">ชื่อทีม/หน่วยงาน</label>
+                    <input type="text" id="teamStandingsName" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-300 mb-1">แนบไฟล์โลโก้ทีม (ไม่เกิน 10MB)</label>
+                    <input type="file" id="teamStandingsFileInput" accept="image/*" class="w-full text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700 mb-1.5">
+                    <input type="url" id="teamStandingsLogo" placeholder="หรือวาง URL โลโก้" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">จำนวนนัดแข่ง</label>
+                        <input type="number" id="teamPlayed" value="0" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">ชนะ</label>
+                        <input type="number" id="teamWon" value="0" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">แพ้</label>
+                        <input type="number" id="teamLost" value="0" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-300 mb-1">คะแนนรวมสะสม</label>
+                    <input type="number" id="teamTotalPoints" value="0" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeTeamModal()" class="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs">ยกเลิก</button>
+                    <button type="submit" id="saveTeamSubmitBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs flex items-center gap-1.5">
+                        <i class="fa-solid fa-floppy-disk"></i> บันทึก
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- Firebase Integration Module -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.processImageFileInput = function(fileInputEl) {
+            return new Promise((resolve, reject) => {
+                if (!fileInputEl || !fileInputEl.files || fileInputEl.files.length === 0) {
+                    resolve(null);
+                    return;
                 }
 
-                return `
-                    <tr class="hover:bg-slate-800/40 transition">
-                        <td class="py-3 px-4 text-center">${rankBadge}</td>
-                        <td class="py-3 px-4">
-                            <div class="flex items-center gap-3">
-                                <img src="${escapeHtml(team.logo || getFallbackImage(team.name))}" 
-                                     onerror="this.src='${getFallbackImage(team.name)}'" 
-                                     class="w-8 h-8 rounded-lg object-cover bg-slate-900 border border-slate-700">
-                                <span class="font-bold text-white">${escapeHtml(team.name)}</span>
-                            </div>
-                        </td>
-                        <td class="py-3 px-4 text-center text-slate-300">${team.played || 0}</td>
-                        <td class="py-3 px-4 text-center text-emerald-400 font-medium">${team.won || 0}</td>
-                        <td class="py-3 px-4 text-center text-rose-400 font-medium">${team.lost || 0}</td>
-                        <td class="py-3 px-4 text-center font-black text-blue-400 text-base">${team.points || 0}</td>
-                        <td class="py-3 px-4 text-center">${medalProbHtml}</td>
-                        ${isAdmin ? `
-                            <td class="py-3 px-4 text-center">
-                                <button onclick="openAddTeamModal('${team.id}')" class="p-1.5 text-slate-400 hover:text-amber-400">
-                                    <i class="fa-solid fa-pen"></i>
-                                </button>
-                                <button onclick="deleteTeamStandings('${team.id}')" class="p-1.5 text-slate-400 hover:text-rose-400">
-                                    <i class="fa-solid fa-trash"></i>
-                                </button>
-                            </td>
-                        ` : ''}
-                    </tr>
-                `;
-            }).join('');
+                const file = fileInputEl.files[0];
+                const MAX_SIZE_MB = 10;
+                if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+                    reject(new Error(`ไฟล์ภาพมีขนาดใหญ่เกิน ${MAX_SIZE_MB} MB กรุณาเลือกไฟล์ขนาดไม่เกิน 10 MB`));
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const maxDimension = 200; // Resize image to 200px max width/height for fast loading
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > height) {
+                            if (width > maxDimension) {
+                                height = Math.round((height * maxDimension) / width);
+                                width = maxDimension;
+                            }
+                        } else {
+                            if (height > maxDimension) {
+                                width = Math.round((width * maxDimension) / height);
+                                height = maxDimension;
+                            }
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Compress to JPEG Data URL (~20-30KB payload)
+                        resolve(canvas.toDataURL('image/jpeg', 0.85));
+                    };
+                    img.onerror = () => reject(new Error("ไม่สามารถประมวลผลไฟล์รูปภาพได้"));
+                    img.src = e.target.result;
+                };
+                reader.onerror = () => reject(new Error("เกิดข้อผิดพลาดในการอ่านไฟล์ภาพ"));
+                reader.readAsDataURL(file);
+            });
+        };
+
+        window.saveMatch = async function(e) {
+            e.preventDefault();
+            if (!window.appState.isAdmin) return;
+
+            const db = window.appState.db;
+            const matchId = document.getElementById('matchFormId').value;
+            const submitBtn = document.getElementById('saveMatchSubmitBtn');
+
+            try {
+                if (submitBtn) submitBtn.disabled = true;
+
+                // Process uploaded files if selected
+                const team1UploadedLogo = await window.processImageFileInput(document.getElementById('team1FileInput'));
+                const team2UploadedLogo = await window.processImageFileInput(document.getElementById('team2FileInput'));
+
+                const team1FinalLogo = team1UploadedLogo || document.getElementById('team1Logo').value.trim();
+                const team2FinalLogo = team2UploadedLogo || document.getElementById('team2Logo').value.trim();
+
+                const matchData = {
+                    sport: document.getElementById('matchSport').value.trim(),
+                    status: document.getElementById('matchStatus').value,
+                    time: document.getElementById('matchTime').value.trim(),
+                    team1: {
+                        name: document.getElementById('team1Name').value.trim(),
+                        score: parseInt(document.getElementById('team1Score').value, 10) || 0,
+                        logo: team1FinalLogo
+                    },
+                    team2: {
+                        name: document.getElementById('team2Name').value.trim(),
+                        score: parseInt(document.getElementById('team2Score').value, 10) || 0,
+                        logo: team2FinalLogo
+                    },
+                    updatedAt: new Date().toISOString()
+                };
+
+                if (matchId) {
+                    const matchRef = doc(db, 'artifacts', appId, 'public', 'data', 'matches', matchId);
+                    await updateDoc(matchRef, matchData);
+                    showToast("แก้ไขแมตช์การแข่งขันเรียบร้อย", "success");
+                } else {
+                    const matchesRef = collection(db, 'artifacts', appId, 'public', 'data', 'matches');
+                    await addDoc(matchesRef, matchData);
+                    showToast("เพิ่มแมตช์การแข่งขันใหม่สำเร็จ", "success");
+                }
+                closeMatchModal();
+            } catch (err) {
+                console.error("Save match error:", err);
+                showToast(err.message || "ไม่สามารถบันทึกข้อมูลได้", "error");
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        };
+
+        window.saveTeamStandings = async function(e) {
+            e.preventDefault();
+            if (!window.appState.isAdmin) return;
+
+            const db = window.appState.db;
+            const teamId = document.getElementById('teamFormId').value;
+            const submitBtn = document.getElementById('saveTeamSubmitBtn');
+
+            try {
+                if (submitBtn) submitBtn.disabled = true;
+
+                const uploadedLogo = await window.processImageFileInput(document.getElementById('teamStandingsFileInput'));
+                const finalLogo = uploadedLogo || document.getElementById('teamStandingsLogo').value.trim();
+
+                const data = {
+                    name: document.getElementById('teamStandingsName').value.trim(),
+                    logo: finalLogo,
+                    played: parseInt(document.getElementById('teamPlayed').value, 10) || 0,
+                    won: parseInt(document.getElementById('teamWon').value, 10) || 0,
+                    lost: parseInt(document.getElementById('teamLost').value, 10) || 0,
+                    points: parseInt(document.getElementById('teamTotalPoints').value, 10) || 0
+                };
+
+                if (teamId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'standings', teamId), data);
+                } else {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'standings'), data);
+                }
+                closeTeamModal();
+                showToast("บันทึกตารางคะแนนสำเร็จ", "success");
+            } catch (err) {
+                console.error("Save team error:", err);
+                showToast(err.message || "ไม่สามารถบันทึกได้", "error");
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        };
+
+        window.downloadMatchCardImage = function(matchId, sport, t1, t2) {
+            const cardEl = document.getElementById(`match-card-${matchId}`);
+            if (!cardEl) return;
+
+            const hiddenElements = cardEl.querySelectorAll('.capture-hide');
+            const shownElements = cardEl.querySelectorAll('.capture-show');
+
+            hiddenElements.forEach(el => el.style.display = 'none');
+            shownElements.forEach(el => el.style.display = 'block');
+
+            showToast("กำลังสร้างรูปภาพ...", "info");
+
+            html2canvas(cardEl, {
+                backgroundColor: '#0f172a',
+                scale: 2,
+                useCORS: true,
+                logging: false
+            }).then(canvas => {
+                hiddenElements.forEach(el => el.style.display = '');
+                shownElements.forEach(el => el.style.display = '');
+
+                const link = document.createElement('a');
+                const cleanName = `${sport}_${t1}_vs_${t2}`.replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+                link.download = `Score_${cleanName}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+
+                showToast("ดาวน์โหลดภาพผลการแข่งขันสำเร็จ", "success");
+            }).catch(err => {
+                hiddenElements.forEach(el => el.style.display = '');
+                shownElements.forEach(el => el.style.display = '');
+                console.error("Export PNG error:", err);
+                showToast("ไม่สามารถสร้างรูปภาพได้", "error");
+            });
         };
 
         window.handleAdminLogin = function(e) {
@@ -856,6 +1081,10 @@
             document.getElementById('matchFormId').value = id || '';
             document.getElementById('matchModalTitle').textContent = id ? "แก้ไขข้อมูลการแข่งขัน" : "เพิ่มข้อมูลการแข่งขัน";
 
+            // Reset File Inputs
+            document.getElementById('team1FileInput').value = '';
+            document.getElementById('team2FileInput').value = '';
+
             if (id) {
                 const match = window.appState.matches.find(m => m.id === id);
                 if (match) {
@@ -886,13 +1115,10 @@
             modal.classList.remove('hidden');
         }
 
-        function closeMatchModal() {
-            document.getElementById('matchModal').classList.add('hidden');
-        }
-
         function openAddTeamModal(id = null) {
             const modal = document.getElementById('teamModal');
             document.getElementById('teamFormId').value = id || '';
+            document.getElementById('teamStandingsFileInput').value = '';
 
             if (id) {
                 const team = window.appState.standings.find(s => s.id === id);
