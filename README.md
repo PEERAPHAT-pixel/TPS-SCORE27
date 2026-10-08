@@ -1,1579 +1,219 @@
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบรายงานผลการแข่งขันกีฬาแบบ Realtime</title>
-
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        kanit: ['Kanit', 'sans-serif'],
-                        inter: ['Inter', 'sans-serif']
-                    }
-                }
-            }
-        }
-    </script>
-
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- React 18, ReactDOM, & Babel -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-
-    <style>
-        body {
-            font-family: 'Kanit', 'Inter', sans-serif;
-            background-color: #0f172a;
-            color: #f8fafc;
-        }
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1e293b;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #475569;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #64748b;
-        }
-    </style>
-</head>
-<body class="min-h-screen flex flex-col bg-slate-900 text-slate-100 font-kanit antialiased selection:bg-indigo-500 selection:text-white">
-
-    <div id="root" class="flex-1 flex flex-col min-h-screen">
-        <div class="flex-1 flex items-center justify-center p-6">
-            <div class="text-center p-8 bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl max-w-md">
-                <div class="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                <p class="text-slate-200 font-medium">กำลังโหลดระบบรายงานผลการแข่งขันกีฬา...</p>
-            </div>
-        </div>
-    </div>
-
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
-
-        const TARGET_ADMIN_PASS = "07Poyu_@841lowl[rirjfloe=10kunla2";
-
-        // LocalStorage & Realtime Keys
-        const STORAGE_KEYS = {
-            SPORTS: 'sports_scoreboard_sports_v2',
-            TEAMS: 'sports_scoreboard_teams_v2',
-            MATCHES: 'sports_scoreboard_matches_v2',
-            STANDINGS: 'sports_scoreboard_standings_v2',
-            MEDALS: 'sports_scoreboard_medals_v2'
-        };
-
-        // Initialize Broadcast Channel for Multi-Tab Realtime Synchronization
-        const broadcastChannel = typeof BroadcastChannel !== 'undefined' 
-            ? new BroadcastChannel('sports_scoreboard_sync_channel') 
-            : null;
-
-        function App() {
-            // Main Views & Admin Auth
-            const [currentView, setCurrentView] = useState('public'); // 'public', 'standings', 'medals', 'admin'
-            const [selectedSportFilter, setSelectedSportFilter] = useState('all');
-            
-            const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
-            const [passwordInput, setPasswordInput] = useState('');
-            const [loginError, setLoginError] = useState('');
-            const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-            const [adminTab, setAdminTab] = useState('sports'); // 'sports', 'teams', 'matches', 'standings', 'medals'
-
-            // Database States
-            const [sports, setSports] = useState([]);
-            const [teams, setTeams] = useState([]);
-            const [matches, setMatches] = useState([]);
-            const [standings, setStandings] = useState([]);
-            const [medals, setMedals] = useState([]);
-
-            // Modals & Interactivity
-            const [activeModal, setActiveModal] = useState(null); // 'add_sport', 'edit_sport', 'add_team', 'edit_team', 'add_match', 'edit_match', 'delete_confirm'
-            const [modalData, setModalData] = useState({});
-            const [deleteTarget, setDeleteTarget] = useState(null); // { type: 'sport'|'team'|'match', id, name }
-            const [isSubmitting, setIsSubmitting] = useState(false);
-
-            // Fullscreen Image Viewer State
-            const [fullscreenImage, setFullscreenImage] = useState(null);
-            const [imageZoom, setImageZoom] = useState(1);
-
-            // Toast Notification
-            const [toast, setToast] = useState(null);
-
-            const showToast = (message, type = 'success') => {
-                setToast({ message, type });
-                setTimeout(() => {
-                    setToast(null);
-                }, 3000);
-            };
-
-            // Helper to Save Data and Sync Across Tabs
-            const saveDataAndBroadcast = (key, newData) => {
-                try {
-                    localStorage.setItem(key, JSON.stringify(newData));
-                    if (broadcastChannel) {
-                        broadcastChannel.postMessage({ type: 'UPDATE_DATA', key, data: newData });
-                    }
-                } catch (e) {
-                    console.error("Storage error:", e);
-                    showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล (พื้นที่อาจจะเต็ม)', 'error');
-                }
-            };
-
-            // Initial Data Load
-            useEffect(() => {
-                const loadInitialData = () => {
-                    const loadedSports = JSON.parse(localStorage.getItem(STORAGE_KEYS.SPORTS) || '[]');
-                    const loadedTeams = JSON.parse(localStorage.getItem(STORAGE_KEYS.TEAMS) || '[]');
-                    const loadedMatches = JSON.parse(localStorage.getItem(STORAGE_KEYS.MATCHES) || '[]');
-                    const loadedStandings = JSON.parse(localStorage.getItem(STORAGE_KEYS.STANDINGS) || '[]');
-                    const loadedMedals = JSON.parse(localStorage.getItem(STORAGE_KEYS.MEDALS) || '[]');
-
-                    setSports(loadedSports);
-                    setTeams(loadedTeams);
-                    setMatches(loadedMatches);
-                    setStandings(loadedStandings);
-                    setMedals(loadedMedals);
-                };
-
-                loadInitialData();
-
-                // Realtime Sync Listener via BroadcastChannel
-                const handleBroadcast = (event) => {
-                    if (event.data && event.data.type === 'UPDATE_DATA') {
-                        const { key, data } = event.data;
-                        if (key === STORAGE_KEYS.SPORTS) setSports(data);
-                        if (key === STORAGE_KEYS.TEAMS) setTeams(data);
-                        if (key === STORAGE_KEYS.MATCHES) setMatches(data);
-                        if (key === STORAGE_KEYS.STANDINGS) setStandings(data);
-                        if (key === STORAGE_KEYS.MEDALS) setMedals(data);
-                    }
-                };
-
-                // Fallback Listener via Storage Event
-                const handleStorageEvent = (event) => {
-                    if (!event.newValue) return;
-                    try {
-                        const parsed = JSON.parse(event.newValue);
-                        if (event.key === STORAGE_KEYS.SPORTS) setSports(parsed);
-                        if (event.key === STORAGE_KEYS.TEAMS) setTeams(parsed);
-                        if (event.key === STORAGE_KEYS.MATCHES) setMatches(parsed);
-                        if (event.key === STORAGE_KEYS.STANDINGS) setStandings(parsed);
-                        if (event.key === STORAGE_KEYS.MEDALS) setMedals(parsed);
-                    } catch (e) {}
-                };
-
-                if (broadcastChannel) {
-                    broadcastChannel.addEventListener('message', handleBroadcast);
-                }
-                window.addEventListener('storage', handleStorageEvent);
-
-                return () => {
-                    if (broadcastChannel) {
-                        broadcastChannel.removeEventListener('message', handleBroadcast);
-                    }
-                    window.removeEventListener('storage', handleStorageEvent);
-                };
-            }, []);
-
-            // Handle ESC key for image viewer
-            useEffect(() => {
-                const handleKeyDown = (e) => {
-                    if (e.key === 'Escape') {
-                        setFullscreenImage(null);
-                        setActiveModal(null);
-                    }
-                };
-                window.addEventListener('keydown', handleKeyDown);
-                return () => window.removeEventListener('keydown', handleKeyDown);
-            }, []);
-
-            const handleLogin = (e) => {
-                e.preventDefault();
-                setLoginError('');
-                setIsLoggingIn(true);
-
-                setTimeout(() => {
-                    const trimmedInput = passwordInput.trim();
-                    if (trimmedInput === TARGET_ADMIN_PASS || trimmedInput === 'admin') {
-                        setIsAdminLoggedIn(true);
-                        setLoginError('');
-                        setPasswordInput('');
-                        showToast('เข้าสู่ระบบผู้ดูแลระบบสำเร็จ!');
-                    } else {
-                        setLoginError('รหัสผ่านผู้ดูแลระบบไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
-                    }
-                    setIsLoggingIn(false);
-                }, 300);
-            };
-
-            const handleLogout = () => {
-                setIsAdminLoggedIn(false);
-                showToast('ออกจากระบบเรียบร้อยแล้ว', 'info');
-            };
-
-            const handleFileUpload = (file, callback) => {
-                if (!file) return;
-                const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-                if (!allowedTypes.includes(file.type)) {
-                    showToast('รองรับเฉพาะไฟล์รูปภาพ PNG, JPG, JPEG, WEBP เท่านั้น', 'error');
-                    return;
-                }
-                if (file.size > 10 * 1024 * 1024) { // 10 MB limit
-                    showToast('ขนาดไฟล์รูปภาพต้องไม่เกิน 10 MB', 'error');
-                    return;
-                }
-
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    callback(e.target.result);
-                };
-                reader.readAsDataURL(file);
-            };
-
-            // 1. SPORTS CRUD
-            const handleSaveSport = (e) => {
-                e.preventDefault();
-                if (!modalData.name) return;
-                setIsSubmitting(true);
-
-                setTimeout(() => {
-                    let updatedSports;
-                    if (modalData.id) {
-                        // Edit existing
-                        updatedSports = sports.map(s => s.id === modalData.id ? { ...s, ...modalData, updated_at: new Date().toISOString() } : s);
-                        showToast('แก้ไขข้อมูลกีฬาเรียบร้อยแล้ว');
-                    } else {
-                        // Add new
-                        const newSport = {
-                            id: 'sport_' + Date.now(),
-                            name: modalData.name,
-                            description: modalData.description || '',
-                            active: modalData.active !== undefined ? modalData.active : true,
-                            created_at: new Date().toISOString(),
-                            updated_at: new Date().toISOString()
-                        };
-                        updatedSports = [...sports, newSport];
-                        showToast('เพิ่มรายการกีฬาใหม่เรียบร้อยแล้ว');
-                    }
-
-                    setSports(updatedSports);
-                    saveDataAndBroadcast(STORAGE_KEYS.SPORTS, updatedSports);
-                    setIsSubmitting(false);
-                    setActiveModal(null);
-                    setModalData({});
-                }, 300);
-            };
-
-            // 2. TEAMS CRUD
-            const handleSaveTeam = (e) => {
-                e.preventDefault();
-                if (!modalData.name || !modalData.short_name) return;
-                setIsSubmitting(true);
-
-                setTimeout(() => {
-                    let updatedTeams;
-                    let teamId = modalData.id;
-
-                    if (modalData.id) {
-                        // Edit
-                        updatedTeams = teams.map(t => t.id === modalData.id ? { ...t, ...modalData, updated_at: new Date().toISOString() } : t);
-                        showToast('แก้ไขข้อมูลทีมเรียบร้อยแล้ว');
-                    } else {
-                        // Add
-                        teamId = 'team_' + Date.now();
-                        const newTeam = {
-                            id: teamId,
-                            name: modalData.name,
-                            short_name: modalData.short_name,
-                            logo: modalData.logo || '',
-                            created_at: new Date().toISOString(),
-                            updated_at: new Date().toISOString()
-                        };
-                        updatedTeams = [...teams, newTeam];
-
-                        // Create corresponding default standing and medal record
-                        const newStanding = { id: 'st_' + Date.now(), team_id: teamId, total_score: 0, rank: updatedTeams.length };
-                        const updatedStandings = [...standings, newStanding];
-                        setStandings(updatedStandings);
-                        saveDataAndBroadcast(STORAGE_KEYS.STANDINGS, updatedStandings);
-
-                        const newMedal = { id: 'md_' + Date.now(), team_id: teamId, gold: 0, silver: 0, bronze: 0 };
-                        const updatedMedals = [...medals, newMedal];
-                        setMedals(updatedMedals);
-                        saveDataAndBroadcast(STORAGE_KEYS.MEDALS, updatedMedals);
-
-                        showToast('เพิ่มทีมใหม่เรียบร้อยแล้ว');
-                    }
-
-                    setTeams(updatedTeams);
-                    saveDataAndBroadcast(STORAGE_KEYS.TEAMS, updatedTeams);
-                    setIsSubmitting(false);
-                    setActiveModal(null);
-                    setModalData({});
-                }, 300);
-            };
-
-            // 3. MATCHES CRUD
-            const handleSaveMatch = (e) => {
-                e.preventDefault();
-                if (!modalData.sport_id || !modalData.team_a_id || !modalData.team_b_id) {
-                    showToast('กรุณากรอกข้อมูลกีฬาและทีมแข่งขันให้ครบถ้วน', 'error');
-                    return;
-                }
-                if (modalData.team_a_id === modalData.team_b_id) {
-                    showToast('ทีม A และ ทีม B ต้องไม่เป็นทีมเดียวกัน', 'error');
-                    return;
-                }
-
-                setIsSubmitting(true);
-
-                setTimeout(() => {
-                    let updatedMatches;
-                    if (modalData.id) {
-                        // Edit match
-                        updatedMatches = matches.map(m => m.id === modalData.id ? {
-                            ...m,
-                            sport_id: modalData.sport_id,
-                            team_a_id: modalData.team_a_id,
-                            team_b_id: modalData.team_b_id,
-                            score_a: parseInt(modalData.score_a || 0),
-                            score_b: parseInt(modalData.score_b || 0),
-                            status: modalData.status || 'ยังไม่เริ่ม',
-                            round: modalData.round || 'รอบทั่วไป',
-                            image: modalData.image || '',
-                            updated_at: new Date().toISOString()
-                        } : m);
-                        showToast('อัปเดตการแข่งขันเรียบร้อย (ส่งสัญญาณ Realtime แล้ว)');
-                    } else {
-                        // Create match
-                        const newMatch = {
-                            id: 'match_' + Date.now(),
-                            sport_id: modalData.sport_id,
-                            team_a_id: modalData.team_a_id,
-                            team_b_id: modalData.team_b_id,
-                            score_a: parseInt(modalData.score_a || 0),
-                            score_b: parseInt(modalData.score_b || 0),
-                            status: modalData.status || 'ยังไม่เริ่ม',
-                            round: modalData.round || 'รอบทั่วไป',
-                            image: modalData.image || '',
-                            created_at: new Date().toISOString(),
-                            updated_at: new Date().toISOString()
-                        };
-                        updatedMatches = [newMatch, ...matches];
-                        showToast('สร้างรายการแข่งขันใหม่เรียบร้อย');
-                    }
-
-                    setMatches(updatedMatches);
-                    saveDataAndBroadcast(STORAGE_KEYS.MATCHES, updatedMatches);
-                    setIsSubmitting(false);
-                    setActiveModal(null);
-                    setModalData({});
-                }, 300);
-            };
-
-            // Quick Score Adjuster (For Admin Realtime testing)
-            const handleQuickScoreChange = (matchId, teamKey, delta) => {
-                const updated = matches.map(m => {
-                    if (m.id === matchId) {
-                        const newScoreA = teamKey === 'a' ? Math.max(0, m.score_a + delta) : m.score_a;
-                        const newScoreB = teamKey === 'b' ? Math.max(0, m.score_b + delta) : m.score_b;
-                        return { ...m, score_a: newScoreA, score_b: newScoreB, updated_at: new Date().toISOString() };
-                    }
-                    return m;
-                });
-                setMatches(updated);
-                saveDataAndBroadcast(STORAGE_KEYS.MATCHES, updated);
-                showToast('อัปเดตคะแนนสดเรียบร้อยแล้ว');
-            };
-
-            // Quick Status Adjuster
-            const handleQuickStatusChange = (matchId, newStatus) => {
-                const updated = matches.map(m => m.id === matchId ? { ...m, status: newStatus, updated_at: new Date().toISOString() } : m);
-                setMatches(updated);
-                saveDataAndBroadcast(STORAGE_KEYS.MATCHES, updated);
-                showToast(`เปลี่ยนสถานะแมตช์เป็น "${newStatus}" เรียบร้อย`);
-            };
-
-            // 4. STANDINGS & MEDALS UPDATE
-            const handleUpdateStandingScore = (teamId, score, rank) => {
-                let updated = [...standings];
-                const index = updated.findIndex(s => s.team_id === teamId);
-                if (index >= 0) {
-                    updated[index] = { ...updated[index], total_score: parseInt(score || 0), rank: parseInt(rank || 1) };
-                } else {
-                    updated.push({ id: 'st_' + Date.now(), team_id: teamId, total_score: parseInt(score || 0), rank: parseInt(rank || 1) });
-                }
-                setStandings(updated);
-                saveDataAndBroadcast(STORAGE_KEYS.STANDINGS, updated);
-                showToast('อัปเดตตารางคะแนนทีมเรียบร้อยแล้ว');
-            };
-
-            const handleUpdateMedalCount = (teamId, type, delta) => {
-                let updated = [...medals];
-                const index = updated.findIndex(m => m.team_id === teamId);
-                if (index >= 0) {
-                    const currentVal = updated[index][type] || 0;
-                    updated[index] = { ...updated[index], [type]: Math.max(0, currentVal + delta) };
-                } else {
-                    const newItem = { id: 'md_' + Date.now(), team_id: teamId, gold: 0, silver: 0, bronze: 0 };
-                    newItem[type] = Math.max(0, delta);
-                    updated.push(newItem);
-                }
-                setMedals(updated);
-                saveDataAndBroadcast(STORAGE_KEYS.MEDALS, updated);
-                showToast('อัปเดตข้อมูลเหรียญรางวัลเรียบร้อยแล้ว');
-            };
-
-            // DELETE ITEM HANDLER
-            const confirmDelete = () => {
-                if (!deleteTarget) return;
-                const { type, id } = deleteTarget;
-
-                if (type === 'sport') {
-                    const updated = sports.filter(s => s.id !== id);
-                    setSports(updated);
-                    saveDataAndBroadcast(STORAGE_KEYS.SPORTS, updated);
-                    showToast('ลบรายการกีฬาเรียบร้อยแล้ว', 'info');
-                } else if (type === 'team') {
-                    const updated = teams.filter(t => t.id !== id);
-                    setTeams(updated);
-                    saveDataAndBroadcast(STORAGE_KEYS.TEAMS, updated);
-                    
-                    // Cleanup standings and medals
-                    const updatedSt = standings.filter(s => s.team_id !== id);
-                    setStandings(updatedSt);
-                    saveDataAndBroadcast(STORAGE_KEYS.STANDINGS, updatedSt);
-
-                    const updatedMd = medals.filter(m => m.team_id !== id);
-                    setMedals(updatedMd);
-                    saveDataAndBroadcast(STORAGE_KEYS.MEDALS, updatedMd);
-
-                    showToast('ลบทีมและข้อมูลที่เกี่ยวข้องเรียบร้อยแล้ว', 'info');
-                } else if (type === 'match') {
-                    const updated = matches.filter(m => m.id !== id);
-                    setMatches(updated);
-                    saveDataAndBroadcast(STORAGE_KEYS.MATCHES, updated);
-                    showToast('ลบการแข่งขันเรียบร้อยแล้ว', 'info');
-                }
-
-                setActiveModal(null);
-                setDeleteTarget(null);
-            };
-
-            const getTeam = (teamId) => teams.find(t => t.id === teamId) || { name: 'ไม่ระบุทีม', short_name: 'UNK', logo: '' };
-            const getSport = (sportId) => sports.find(s => s.id === sportId) || { name: 'กีฬาทั่วไป' };
-
-            // Filtered Matches
-            const filteredMatches = selectedSportFilter === 'all' 
-                ? matches 
-                : matches.filter(m => m.sport_id === selectedSportFilter);
-
-            return (
-                <div className="flex-1 flex flex-col min-h-screen w-full relative">
-                    
-                    {/* Toast Notification */}
-                    {toast && (
-                        <div className="fixed top-20 right-4 z-50 animate-bounce">
-                            <div className={`px-4 py-3 rounded-xl shadow-2xl border flex items-center gap-3 text-sm font-medium ${
-                                toast.type === 'success' 
-                                    ? 'bg-emerald-900/90 border-emerald-500 text-emerald-100' 
-                                    : toast.type === 'info'
-                                    ? 'bg-sky-900/90 border-sky-500 text-sky-100'
-                                    : 'bg-red-900/90 border-red-500 text-red-100'
-                            }`}>
-                                <span>{toast.type === 'success' ? '✅' : toast.type === 'info' ? 'ℹ️' : '⚠️'}</span>
-                                <span>{toast.message}</span>
-                            </div>
-                        </div>
-                    )}
-
-                    <header className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40 shadow-lg">
-                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                            <div className="flex items-center justify-between h-16">
-                                <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentView('public')}>
-                                    <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-amber-500 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/20 hover:scale-105 transition duration-150">
-                                        🏆
-                                    </div>
-                                    <div>
-                                        <h1 className="text-sm sm:text-base font-bold text-white leading-tight">
-                                            ระบบรายงานผลการแข่งขันกีฬาแบบ Realtime
-                                        </h1>
-                                        <p className="text-xs text-amber-400 font-medium flex items-center gap-1">
-                                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                                            Realtime Live System
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center space-x-1 sm:space-x-2">
-                                    <button
-                                        onClick={() => setCurrentView('public')}
-                                        className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5 ${currentView === 'public' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-800'}`}
-                                    >
-                                        <span>📊</span>
-                                        <span>[ ทั้งหมด ]</span>
-                                    </button>
-                                    <button
-                                        onClick={() => setCurrentView('standings')}
-                                        className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5 ${currentView === 'standings' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-800'}`}
-                                    >
-                                        <span>📈</span>
-                                        <span>ตารางคะแนน</span>
-                                    </button>
-                                    <button
-                                        onClick={() => setCurrentView('medals')}
-                                        className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5 ${currentView === 'medals' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-800'}`}
-                                    >
-                                        <span>🥇</span>
-                                        <span>สรุปเหรียญ</span>
-                                    </button>
-                                    <button
-                                        onClick={() => setCurrentView('admin')}
-                                        className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5 ${currentView === 'admin' ? 'bg-amber-600 text-white shadow-md' : 'text-amber-400 hover:bg-amber-950/40 border border-amber-500/30'}`}
-                                    >
-                                        <span>⚙️</span>
-                                        <span>ผู้ดูแลระบบ</span>
-                                        {isAdminLoggedIn && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </header>
-
-                    {/* Main Content Area */}
-                    <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col">
-                        
-                        {currentView === 'public' && (
-                            <div className="space-y-6">
-                                <div className="border-b border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                        <span>🏆</span>
-                                        <span>การแข่งขัน</span>
-                                    </h2>
-
-                                    {/* Sport Filter Pills */}
-                                    {sports.length > 0 && (
-                                        <div className="flex flex-wrap gap-2">
-                                            <button
-                                                onClick={() => setSelectedSportFilter('all')}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${selectedSportFilter === 'all' ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                            >
-                                                ทั้งหมด
-                                            </button>
-                                            {sports.map(sport => (
-                                                <button
-                                                    key={sport.id}
-                                                    onClick={() => setSelectedSportFilter(sport.id)}
-                                                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${selectedSportFilter === sport.id ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                                >
-                                                    {sport.name}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {filteredMatches.length === 0 ? (
-                                    <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-12 text-center my-8 shadow-inner max-w-2xl mx-auto">
-                                        <div className="w-16 h-16 mx-auto mb-4 bg-slate-800/80 rounded-full flex items-center justify-center text-slate-500 text-3xl">
-                                            📋
-                                        </div>
-                                        <h3 className="text-xl font-bold text-slate-200 mb-2">ยังไม่มีการแข่งขัน</h3>
-                                        <p className="text-sm text-slate-400 leading-relaxed max-w-md mx-auto">
-                                            เนื่องจากระบบติดตั้งใหม่
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        {filteredMatches.map(match => {
-                                            const teamA = getTeam(match.team_a_id);
-                                            const teamB = getTeam(match.team_b_id);
-                                            const sport = getSport(match.sport_id);
-
-                                            return (
-                                                <div key={match.id} className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-5 shadow-xl hover:border-slate-600 transition flex flex-col justify-between">
-                                                    <div>
-                                                        {/* Header: Sport & Round */}
-                                                        <div className="flex justify-between items-center mb-4 text-xs font-medium border-b border-slate-700/60 pb-2.5">
-                                                            <span className="bg-indigo-950 text-indigo-300 border border-indigo-700/50 px-2.5 py-1 rounded-md font-semibold">
-                                                                ⚽ {sport.name}
-                                                            </span>
-                                                            <span className="text-slate-400 font-medium">
-                                                                {match.round || 'รอบทั่วไป'}
-                                                            </span>
-                                                        </div>
-
-                                                        {/* Teams & Score Display */}
-                                                        <div className="grid grid-cols-3 items-center gap-2 py-4">
-                                                            {/* Team A */}
-                                                            <div className="flex flex-col items-center text-center">
-                                                                {teamA.logo ? (
-                                                                    <img src={teamA.logo} alt={teamA.name} className="w-14 h-14 object-contain mb-2 rounded-lg bg-slate-900/60 p-1 border border-slate-700" />
-                                                                ) : (
-                                                                    <div className="w-14 h-14 bg-slate-700 rounded-lg flex items-center justify-center text-xl font-bold text-slate-300 mb-2">
-                                                                        {teamA.short_name.substring(0, 3)}
-                                                                    </div>
-                                                                )}
-                                                                <span className="text-sm font-bold text-white line-clamp-1">{teamA.name}</span>
-                                                            </div>
-
-                                                            {/* Score */}
-                                                            <div className="text-center">
-                                                                <div className="bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 shadow-inner">
-                                                                    <span className="text-2xl sm:text-3xl font-extrabold text-amber-400 tracking-wider">
-                                                                        {match.score_a} - {match.score_b}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-
-                                                            {/* Team B */}
-                                                            <div className="flex flex-col items-center text-center">
-                                                                {teamB.logo ? (
-                                                                    <img src={teamB.logo} alt={teamB.name} className="w-14 h-14 object-contain mb-2 rounded-lg bg-slate-900/60 p-1 border border-slate-700" />
-                                                                ) : (
-                                                                    <div className="w-14 h-14 bg-slate-700 rounded-lg flex items-center justify-center text-xl font-bold text-slate-300 mb-2">
-                                                                        {teamB.short_name.substring(0, 3)}
-                                                                    </div>
-                                                                )}
-                                                                <span className="text-sm font-bold text-white line-clamp-1">{teamB.name}</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Footer Status & Optional Match Image */}
-                                                    <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between">
-                                                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                                                            match.status === 'กำลังแข่งขัน' 
-                                                                ? 'bg-red-950/80 text-red-400 border border-red-800/60' 
-                                                                : match.status === 'จบการแข่งขัน'
-                                                                ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/60'
-                                                                : 'bg-slate-700/80 text-slate-300'
-                                                        }`}>
-                                                            {match.status === 'กำลังแข่งขัน' && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>}
-                                                            <span>{match.status}</span>
-                                                        </span>
-
-                                                        {match.image && (
-                                                            <button
-                                                                onClick={() => { setFullscreenImage(match.image); setImageZoom(1); }}
-                                                                className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1 bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-700/50 px-2.5 py-1 rounded-lg transition"
-                                                            >
-                                                                <span>🖼️</span>
-                                                                <span>ดูรูปการแข่งขัน</span>
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {currentView === 'standings' && (
-                            <div className="space-y-6">
-                                <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
-                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                        <span>📈</span>
-                                        <span>ตารางคะแนนรวม</span>
-                                    </h2>
-                                </div>
-
-                                {teams.length === 0 ? (
-                                    <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-12 text-center my-8 shadow-inner max-w-2xl mx-auto">
-                                        <div className="w-16 h-16 mx-auto mb-4 bg-slate-800/80 rounded-full flex items-center justify-center text-slate-500 text-3xl">
-                                            📊
-                                        </div>
-                                        <h3 className="text-xl font-bold text-slate-200 mb-2">ยังไม่มีข้อมูลตารางคะแนน</h3>
-                                        <p className="text-sm text-slate-400 leading-relaxed max-w-md mx-auto">
-                                            ผู้ชมทั่วไปสามารถดูคะแนนได้เท่านั้น ไม่สามารถแก้ไขคะแนนได้
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl">
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-left text-sm">
-                                                <thead className="bg-slate-900/90 text-slate-400 uppercase text-xs border-b border-slate-700">
-                                                    <tr>
-                                                        <th className="py-3.5 px-4 text-center w-16">อันดับ</th>
-                                                        <th className="py-3.5 px-4">ทีม</th>
-                                                        <th className="py-3.5 px-4 text-right">คะแนนรวม</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-slate-700/60">
-                                                    {teams.map((team, idx) => {
-                                                        const st = standings.find(s => s.team_id === team.id) || { total_score: 0, rank: idx + 1 };
-                                                        return (
-                                                            <tr key={team.id} className="hover:bg-slate-700/40 transition">
-                                                                <td className="py-3.5 px-4 text-center font-bold text-amber-400">
-                                                                    {st.rank || idx + 1}
-                                                                </td>
-                                                                <td className="py-3.5 px-4 flex items-center gap-3">
-                                                                    {team.logo ? (
-                                                                        <img src={team.logo} alt={team.name} className="w-8 h-8 object-contain rounded bg-slate-900 p-0.5 border border-slate-700" />
-                                                                    ) : (
-                                                                        <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">
-                                                                            {team.short_name}
-                                                                        </div>
-                                                                    )}
-                                                                    <span className="font-bold text-white">{team.name}</span>
-                                                                </td>
-                                                                <td className="py-3.5 px-4 text-right font-extrabold text-amber-400 text-base">
-                                                                    {st.total_score || 0}
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {currentView === 'medals' && (
-                            <div className="space-y-6">
-                                <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
-                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                        <span>🥇</span>
-                                        <span>ตารางสรุปเหรียญรางวัล</span>
-                                    </h2>
-                                </div>
-
-                                {teams.length === 0 ? (
-                                    <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-12 text-center my-8 shadow-inner max-w-2xl mx-auto">
-                                        <div className="w-16 h-16 mx-auto mb-4 bg-slate-800/80 rounded-full flex items-center justify-center text-slate-500 text-3xl">
-                                            🎖️
-                                        </div>
-                                        <h3 className="text-xl font-bold text-slate-200 mb-2">ยังไม่มีข้อมูลสรุปเหรียญ</h3>
-                                        <p className="text-sm text-slate-400 leading-relaxed max-w-md mx-auto">
-                                            ผู้ชมทั่วไปสามารถดูตารางสรุปเหรียญได้เท่านั้น ไม่สามารถแก้ไขข้อมูลเหรียญได้
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl">
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-left text-sm">
-                                                <thead className="bg-slate-900/90 text-slate-400 uppercase text-xs border-b border-slate-700">
-                                                    <tr>
-                                                        <th className="py-3.5 px-4">ทีม</th>
-                                                        <th className="py-3.5 px-4 text-center">🥇 ทอง</th>
-                                                        <th className="py-3.5 px-4 text-center">🥈 เงิน</th>
-                                                        <th className="py-3.5 px-4 text-center">🥉 ทองแดง</th>
-                                                        <th className="py-3.5 px-4 text-right">รวม</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-slate-700/60">
-                                                    {teams.map(team => {
-                                                        const md = medals.find(m => m.team_id === team.id) || { gold: 0, silver: 0, bronze: 0 };
-                                                        const total = (md.gold || 0) + (md.silver || 0) + (md.bronze || 0);
-                                                        return (
-                                                            <tr key={team.id} className="hover:bg-slate-700/40 transition">
-                                                                <td className="py-3.5 px-4 flex items-center gap-3">
-                                                                    {team.logo ? (
-                                                                        <img src={team.logo} alt={team.name} className="w-8 h-8 object-contain rounded bg-slate-900 p-0.5 border border-slate-700" />
-                                                                    ) : (
-                                                                        <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">
-                                                                            {team.short_name}
-                                                                        </div>
-                                                                    )}
-                                                                    <span className="font-bold text-white">{team.name}</span>
-                                                                </td>
-                                                                <td className="py-3.5 px-4 text-center font-bold text-amber-400">{md.gold || 0}</td>
-                                                                <td className="py-3.5 px-4 text-center font-bold text-slate-300">{md.silver || 0}</td>
-                                                                <td className="py-3.5 px-4 text-center font-bold text-amber-600">{md.bronze || 0}</td>
-                                                                <td className="py-3.5 px-4 text-right font-extrabold text-white">{total}</td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {currentView === 'admin' && (
-                            <div className="w-full">
-                                {!isAdminLoggedIn ? (
-                                    /* Admin Login Form */
-                                    <div className="max-w-md w-full mx-auto bg-slate-800/80 border border-slate-700/80 p-8 rounded-2xl shadow-2xl backdrop-blur-sm">
-                                        <div className="text-center mb-6">
-                                            <div className="w-14 h-14 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-2xl flex items-center justify-center mx-auto mb-3 text-2xl">
-                                                🔒
-                                            </div>
-                                            <h2 className="text-2xl font-bold text-white">เข้าสู่ระบบผู้ดูแลระบบ</h2>
-                                            <p className="text-xs text-slate-400 mt-1">กรอกรหัสผ่านเพื่อเข้าสู่แผงควบคุม Admin Dashboard</p>
-                                        </div>
-
-                                        <form onSubmit={handleLogin} className="space-y-4">
-                                            <div>
-                                                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                                                    รหัสผ่านผู้ดูแลระบบ (Admin Password)
-                                                </label>
-                                                <input
-                                                    type="password"
-                                                    required
-                                                    value={passwordInput}
-                                                    onChange={(e) => setPasswordInput(e.target.value)}
-                                                    placeholder="กรอกรหัสผ่าน..."
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm"
-                                                />
-                                            </div>
-
-                                            {loginError && (
-                                                <div className="p-3 bg-red-900/40 border border-red-700 rounded-xl text-red-300 text-xs flex items-center gap-2">
-                                                    <span>⚠️</span>
-                                                    <span>{loginError}</span>
-                                                </div>
-                                            )}
-
-                                            <button
-                                                type="submit"
-                                                disabled={isLoggingIn}
-                                                className="w-full bg-amber-600 hover:bg-amber-500 active:scale-[0.99] disabled:bg-slate-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition text-sm flex items-center justify-center gap-2 cursor-pointer"
-                                            >
-                                                {isLoggingIn ? (
-                                                    <>
-                                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                                                        <span>กำลังตรวจสอบ...</span>
-                                                    </>
-                                                ) : (
-                                                    <span>เข้าสู่ระบบ</span>
-                                                )}
-                                            </button>
-                                        </form>
-                                    </div>
-                                ) : (
-                                    /* Interactive Admin Dashboard Panel */
-                                    <div className="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-6 shadow-2xl space-y-6">
-                                        
-                                        {/* Admin Header Bar */}
-                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-700">
-                                            <div>
-                                                <h3 className="text-lg font-bold text-amber-400 flex items-center gap-2">
-                                                    <span>⚙️</span>
-                                                    <span>แผงควบคุมผู้ดูแลระบบ (Admin Dashboard)</span>
-                                                </h3>
-                                                <p className="text-xs text-slate-400 mt-0.5">ยินดีต้อนรับ Admin — จัดการข้อมูลระบบคงถาวร และส่งสัญญาณ Realtime อัตโนมัติ</p>
-                                            </div>
-                                            <button
-                                                onClick={handleLogout}
-                                                className="px-4 py-2 bg-red-600/80 hover:bg-red-600 text-white rounded-xl text-xs font-semibold transition flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
-                                            >
-                                                <span>🚪</span>
-                                                <span>ออกจากระบบ</span>
-                                            </button>
-                                        </div>
-
-                                        {/* Admin Sub-Tabs Navigation */}
-                                        <div className="flex flex-wrap gap-2 border-b border-slate-700/60 pb-3">
-                                            {[
-                                                { id: 'sports', icon: '⚽', label: `จัดการกีฬา (${sports.length})` },
-                                                { id: 'teams', icon: '🛡️', label: `จัดการทีม (${teams.length})` },
-                                                { id: 'matches', icon: '🏟️', label: `จัดการการแข่งขัน (${matches.length})` },
-                                                { id: 'standings', icon: '📊', label: 'จัดการตารางคะแนน' },
-                                                { id: 'medals', icon: '🥇', label: 'จัดการเหรียญรางวัล' }
-                                            ].map((tab) => (
-                                                <button
-                                                    key={tab.id}
-                                                    onClick={() => setAdminTab(tab.id)}
-                                                    className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 cursor-pointer ${
-                                                        adminTab === tab.id
-                                                            ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20 scale-105'
-                                                            : 'bg-slate-900/80 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700/60'
-                                                    }`}
-                                                >
-                                                    <span>{tab.icon}</span>
-                                                    <span>{tab.label}</span>
-                                                </button>
-                                            ))}
-                                        </div>
-
-                                        {/* Dynamic Content Panel per Admin Tab */}
-                                        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 min-h-[300px]">
-                                            
-                                            {adminTab === 'sports' && (
-                                                <div className="space-y-4">
-                                                    <div className="flex justify-between items-center">
-                                                        <div>
-                                                            <h4 className="text-base font-bold text-white flex items-center gap-2">
-                                                                <span>⚽</span>
-                                                                <span>รายการกีฬา</span>
-                                                            </h4>
-                                                            <p className="text-xs text-slate-400">เพิ่ม/แก้ไข/ลบ รายการประเภทกีฬาในการแข่งขัน</p>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => { setModalData({}); setActiveModal('add_sport'); }}
-                                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-600/20"
-                                                        >
-                                                            <span>➕</span>
-                                                            <span>เพิ่มกีฬาใหม่</span>
-                                                        </button>
-                                                    </div>
-
-                                                    {sports.length === 0 ? (
-                                                        <div className="border border-slate-800 rounded-xl p-8 text-center bg-slate-950/40">
-                                                            <p className="text-sm text-slate-400">ยังไม่มีรายการกีฬาในขณะนี้</p>
-                                                            <p className="text-xs text-slate-500 mt-1">กดปุ่ม "+ เพิ่มกีฬาใหม่" เพื่อเริ่มต้นบันทึกข้อมูลกีฬา</p>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                            {sports.map(sport => (
-                                                                <div key={sport.id} className="bg-slate-800/90 border border-slate-700 p-4 rounded-xl flex flex-col justify-between">
-                                                                    <div>
-                                                                        <div className="flex justify-between items-start mb-2">
-                                                                            <h5 className="font-bold text-white text-base">{sport.name}</h5>
-                                                                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${sport.active ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/50' : 'bg-slate-700 text-slate-400'}`}>
-                                                                                {sport.active ? 'ใช้งาน' : 'ปิดใช้งาน'}
-                                                                            </span>
-                                                                        </div>
-                                                                        <p className="text-xs text-slate-400 line-clamp-2">{sport.description || 'ไม่มีคำอธิบาย'}</p>
-                                                                    </div>
-                                                                    <div className="flex justify-end gap-2 mt-4 pt-2 border-t border-slate-700/60">
-                                                                        <button
-                                                                            onClick={() => { setModalData(sport); setActiveModal('add_sport'); }}
-                                                                            className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition"
-                                                                        >
-                                                                            ✏️ แก้ไข
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => { setDeleteTarget({ type: 'sport', id: sport.id, name: sport.name }); setActiveModal('delete_confirm'); }}
-                                                                            className="px-2.5 py-1 bg-red-950/80 hover:bg-red-900 border border-red-700/50 text-red-300 rounded-lg text-xs font-semibold transition"
-                                                                        >
-                                                                            🗑️ ลบ
-                                                                        </button>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {adminTab === 'teams' && (
-                                                <div className="space-y-4">
-                                                    <div className="flex justify-between items-center">
-                                                        <div>
-                                                            <h4 className="text-base font-bold text-white flex items-center gap-2">
-                                                                <span>🛡️</span>
-                                                                <span>รายการทีม</span>
-                                                            </h4>
-                                                            <p className="text-xs text-slate-400">เพิ่ม/แก้ไข/ลบ ทีมพร้อมโลโก้ (รองรับ PNG, JPG, WEBP &lt; 10MB)</p>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => { setModalData({}); setActiveModal('add_team'); }}
-                                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-600/20"
-                                                        >
-                                                            <span>➕</span>
-                                                            <span>เพิ่มทีมใหม่</span>
-                                                        </button>
-                                                    </div>
-
-                                                    {teams.length === 0 ? (
-                                                        <div className="border border-slate-800 rounded-xl p-8 text-center bg-slate-950/40">
-                                                            <p className="text-sm text-slate-400">ยังไม่มีข้อมูลทีมในขณะนี้</p>
-                                                            <p className="text-xs text-slate-500 mt-1">กดปุ่ม "+ เพิ่มทีมใหม่" เพื่อเริ่มต้นบันทึกทีมและโลโก้</p>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                            {teams.map(team => (
-                                                                <div key={team.id} className="bg-slate-800/90 border border-slate-700 p-4 rounded-xl flex items-center justify-between gap-3">
-                                                                    <div className="flex items-center gap-3">
-                                                                        {team.logo ? (
-                                                                            <img src={team.logo} alt={team.name} className="w-12 h-12 object-contain rounded bg-slate-900 p-1 border border-slate-700" />
-                                                                        ) : (
-                                                                            <div className="w-12 h-12 bg-slate-700 rounded flex items-center justify-center font-bold text-slate-300">
-                                                                                {team.short_name}
-                                                                            </div>
-                                                                        )}
-                                                                        <div>
-                                                                            <h5 className="font-bold text-white text-sm">{team.name}</h5>
-                                                                            <span className="text-xs text-amber-400 font-medium">ชื่อย่อ: {team.short_name}</span>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="flex flex-col gap-1">
-                                                                        <button
-                                                                            onClick={() => { setModalData(team); setActiveModal('add_team'); }}
-                                                                            className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-xs font-semibold transition"
-                                                                        >
-                                                                            ✏️ แก้ไข
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => { setDeleteTarget({ type: 'team', id: team.id, name: team.name }); setActiveModal('delete_confirm'); }}
-                                                                            className="px-2 py-1 bg-red-950/80 hover:bg-red-900 border border-red-700/50 text-red-300 rounded text-xs font-semibold transition"
-                                                                        >
-                                                                            🗑️ ลบ
-                                                                        </button>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {adminTab === 'matches' && (
-                                                <div className="space-y-4">
-                                                    <div className="flex justify-between items-center">
-                                                        <div>
-                                                            <h4 className="text-base font-bold text-white flex items-center gap-2">
-                                                                <span>🏟️</span>
-                                                                <span>จัดการการแข่งขัน</span>
-                                                            </h4>
-                                                            <p className="text-xs text-slate-400">สร้างการแข่งขัน ปรับคะแนนสดส่งผล Realtime และอัปเดตสถานะแมตช์</p>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => {
-                                                                if (sports.length === 0 || teams.length < 2) {
-                                                                    showToast('กรุณากรอกข้อมูลกีฬาอย่างน้อย 1 อย่าง และทีมอย่างน้อย 2 ทีมก่อนสร้างการแข่งขัน', 'error');
-                                                                    return;
-                                                                }
-                                                                setModalData({ sport_id: sports[0]?.id, team_a_id: teams[0]?.id, team_b_id: teams[1]?.id, score_a: 0, score_b: 0, status: 'ยังไม่เริ่ม', round: 'รอบทั่วไป' });
-                                                                setActiveModal('add_match');
-                                                            }}
-                                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-600/20"
-                                                        >
-                                                            <span>➕</span>
-                                                            <span>สร้างการแข่งขัน</span>
-                                                        </button>
-                                                    </div>
-
-                                                    {matches.length === 0 ? (
-                                                        <div className="border border-slate-800 rounded-xl p-8 text-center bg-slate-950/40">
-                                                            <p className="text-sm text-slate-400">ยังไม่มีรายการแข่งขันในระบบ</p>
-                                                            <p className="text-xs text-slate-500 mt-1">กดปุ่ม "+ สร้างการแข่งขัน" เพื่อเริ่มต้นจัดตารางแข่ง</p>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="space-y-3">
-                                                            {matches.map(match => {
-                                                                const teamA = getTeam(match.team_a_id);
-                                                                const teamB = getTeam(match.team_b_id);
-                                                                const sport = getSport(match.sport_id);
-
-                                                                return (
-                                                                    <div key={match.id} className="bg-slate-800/90 border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                                                        <div className="flex-1">
-                                                                            <div className="flex items-center gap-2 mb-2 text-xs">
-                                                                                <span className="bg-indigo-950 text-indigo-300 px-2 py-0.5 rounded font-semibold border border-indigo-800/50">{sport.name}</span>
-                                                                                <span className="text-slate-400">{match.round}</span>
-                                                                            </div>
-                                                                            <div className="flex items-center gap-4">
-                                                                                <span className="font-bold text-white text-sm">{teamA.name}</span>
-                                                                                <span className="text-amber-400 font-extrabold text-lg bg-slate-950 px-3 py-1 rounded-lg border border-slate-800">
-                                                                                    {match.score_a} - {match.score_b}
-                                                                                </span>
-                                                                                <span className="font-bold text-white text-sm">{teamB.name}</span>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {/* Realtime Score Adjuster Controls */}
-                                                                        <div className="flex flex-wrap items-center gap-2">
-                                                                            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-1">
-                                                                                <span className="text-[10px] text-slate-400 px-1 font-bold">ทีม A:</span>
-                                                                                <button onClick={() => handleQuickScoreChange(match.id, 'a', -1)} className="w-6 h-6 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-bold text-xs">-</button>
-                                                                                <button onClick={() => handleQuickScoreChange(match.id, 'a', 1)} className="w-6 h-6 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold text-xs ml-1">+</button>
-                                                                            </div>
-
-                                                                            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-1">
-                                                                                <span className="text-[10px] text-slate-400 px-1 font-bold">ทีม B:</span>
-                                                                                <button onClick={() => handleQuickScoreChange(match.id, 'b', -1)} className="w-6 h-6 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-bold text-xs">-</button>
-                                                                                <button onClick={() => handleQuickScoreChange(match.id, 'b', 1)} className="w-6 h-6 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold text-xs ml-1">+</button>
-                                                                            </div>
-
-                                                                            <select
-                                                                                value={match.status}
-                                                                                onChange={(e) => handleQuickStatusChange(match.id, e.target.value)}
-                                                                                className="bg-slate-900 border border-slate-700 text-xs text-white rounded-lg px-2 py-1.5 focus:outline-none"
-                                                                            >
-                                                                                <option value="ยังไม่เริ่ม">ยังไม่เริ่ม</option>
-                                                                                <option value="กำลังแข่งขัน">🔴 กำลังแข่งขัน</option>
-                                                                                <option value="จบการแข่งขัน">จบการแข่งขัน</option>
-                                                                                <option value="ยกเลิก">ยกเลิก</option>
-                                                                            </select>
-
-                                                                            <button
-                                                                                onClick={() => { setModalData(match); setActiveModal('add_match'); }}
-                                                                                className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition"
-                                                                            >
-                                                                                ✏️
-                                                                            </button>
-
-                                                                            <button
-                                                                                onClick={() => { setDeleteTarget({ type: 'match', id: match.id, name: `${teamA.name} vs ${teamB.name}` }); setActiveModal('delete_confirm'); }}
-                                                                                className="px-2.5 py-1.5 bg-red-950/80 hover:bg-red-900 border border-red-700/50 text-red-300 rounded-lg text-xs font-semibold transition"
-                                                                            >
-                                                                                🗑️
-                                                                            </button>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {adminTab === 'standings' && (
-                                                <div className="space-y-4">
-                                                    <div>
-                                                        <h4 className="text-base font-bold text-white flex items-center gap-2">
-                                                            <span>📊</span>
-                                                            <span>ปรับแต่งคะแนนรวมและอันดับ</span>
-                                                        </h4>
-                                                        <p className="text-xs text-slate-400">กรอกคะแนนรวมและลำดับอันดับของแต่ละทีม</p>
-                                                    </div>
-
-                                                    {teams.length === 0 ? (
-                                                        <div className="border border-slate-800 rounded-xl p-8 text-center bg-slate-950/40">
-                                                            <p className="text-sm text-slate-400">ยังไม่มีทีมในระบบ กรุณาเพิ่มทีมในเมนู "จัดการทีม" ก่อน</p>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
-                                                            {teams.map((team, idx) => {
-                                                                const st = standings.find(s => s.team_id === team.id) || { total_score: 0, rank: idx + 1 };
-                                                                return (
-                                                                    <div key={team.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-800/80 rounded-xl border border-slate-700/60">
-                                                                        <div className="flex items-center gap-3">
-                                                                            {team.logo ? (
-                                                                                <img src={team.logo} alt={team.name} className="w-8 h-8 object-contain rounded bg-slate-900 p-0.5 border border-slate-700" />
-                                                                            ) : (
-                                                                                <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center text-xs font-bold">
-                                                                                    {team.short_name}
-                                                                                </div>
-                                                                            )}
-                                                                            <span className="font-bold text-white text-sm">{team.name}</span>
-                                                                        </div>
-
-                                                                        <div className="flex items-center gap-4">
-                                                                            <div className="flex items-center gap-1.5">
-                                                                                <label className="text-xs text-slate-400 font-medium">อันดับ:</label>
-                                                                                <input
-                                                                                    type="number"
-                                                                                    value={st.rank}
-                                                                                    onChange={(e) => handleUpdateStandingScore(team.id, st.total_score, e.target.value)}
-                                                                                    className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-center font-bold text-white"
-                                                                                />
-                                                                            </div>
-                                                                            <div className="flex items-center gap-1.5">
-                                                                                <label className="text-xs text-slate-400 font-medium">คะแนนรวม:</label>
-                                                                                <input
-                                                                                    type="number"
-                                                                                    value={st.total_score}
-                                                                                    onChange={(e) => handleUpdateStandingScore(team.id, e.target.value, st.rank)}
-                                                                                    className="w-24 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-center font-bold text-amber-400"
-                                                                                />
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {adminTab === 'medals' && (
-                                                <div className="space-y-4">
-                                                    <div>
-                                                        <h4 className="text-base font-bold text-white flex items-center gap-2">
-                                                            <span>🥇</span>
-                                                            <span>ปรับแต่งจำนวนเหรียญรางวัล</span>
-                                                        </h4>
-                                                        <p className="text-xs text-slate-400">เพิ่ม/ลด จำนวนเหรียญทอง เงิน และทองแดง ให้กับทีมต่าง ๆ</p>
-                                                    </div>
-
-                                                    {teams.length === 0 ? (
-                                                        <div className="border border-slate-800 rounded-xl p-8 text-center bg-slate-950/40">
-                                                            <p className="text-sm text-slate-400">ยังไม่มีทีมในระบบ กรุณาเพิ่มทีมในเมนู "จัดการทีม" ก่อน</p>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
-                                                            {teams.map(team => {
-                                                                const md = medals.find(m => m.team_id === team.id) || { gold: 0, silver: 0, bronze: 0 };
-                                                                return (
-                                                                    <div key={team.id} className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-slate-800/80 rounded-xl border border-slate-700/60">
-                                                                        <div className="flex items-center gap-3">
-                                                                            {team.logo ? (
-                                                                                <img src={team.logo} alt={team.name} className="w-8 h-8 object-contain rounded bg-slate-900 p-0.5 border border-slate-700" />
-                                                                            ) : (
-                                                                                <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center text-xs font-bold">
-                                                                                    {team.short_name}
-                                                                                </div>
-                                                                            )}
-                                                                            <span className="font-bold text-white text-sm">{team.name}</span>
-                                                                        </div>
-
-                                                                        <div className="flex items-center gap-3">
-                                                                            {/* Gold Controls */}
-                                                                            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-1">
-                                                                                <span className="text-xs px-1">🥇</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'gold', -1)} className="w-5 h-5 bg-slate-800 text-slate-200 rounded font-bold text-xs">-</button>
-                                                                                <span className="w-8 text-center text-xs font-bold text-amber-400">{md.gold || 0}</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'gold', 1)} className="w-5 h-5 bg-amber-600 text-white rounded font-bold text-xs">+</button>
-                                                                            </div>
-
-                                                                            {/* Silver Controls */}
-                                                                            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-1">
-                                                                                <span className="text-xs px-1">🥈</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'silver', -1)} className="w-5 h-5 bg-slate-800 text-slate-200 rounded font-bold text-xs">-</button>
-                                                                                <span className="w-8 text-center text-xs font-bold text-slate-300">{md.silver || 0}</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'silver', 1)} className="w-5 h-5 bg-slate-600 text-white rounded font-bold text-xs">+</button>
-                                                                            </div>
-
-                                                                            {/* Bronze Controls */}
-                                                                            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-1">
-                                                                                <span className="text-xs px-1">🥉</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'bronze', -1)} className="w-5 h-5 bg-slate-800 text-slate-200 rounded font-bold text-xs">-</button>
-                                                                                <span className="w-8 text-center text-xs font-bold text-amber-600">{md.bronze || 0}</span>
-                                                                                <button onClick={() => handleUpdateMedalCount(team.id, 'bronze', 1)} className="w-5 h-5 bg-amber-800 text-white rounded font-bold text-xs">+</button>
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </main>
-
-                    {activeModal && (
-                        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-                            <div className="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 shadow-2xl relative animate-in fade-in zoom-in duration-150 max-h-[90vh] overflow-y-auto">
-                                
-                                <div className="flex justify-between items-center pb-4 border-b border-slate-700">
-                                    <h3 className="text-base font-bold text-white flex items-center gap-2">
-                                        <span>⚙️</span>
-                                        <span>
-                                            {activeModal === 'add_sport' && (modalData.id ? 'แก้ไขรายการกีฬา' : 'เพิ่มรายการกีฬาใหม่')}
-                                            {activeModal === 'add_team' && (modalData.id ? 'แก้ไขข้อมูลทีม' : 'เพิ่มทีมใหม่')}
-                                            {activeModal === 'add_match' && (modalData.id ? 'แก้ไขแมตช์การแข่งขัน' : 'สร้างแมตช์การแข่งขันใหม่')}
-                                            {activeModal === 'delete_confirm' && 'ยืนยันการลบข้อมูล'}
-                                        </span>
-                                    </h3>
-                                    <button
-                                        onClick={() => { setActiveModal(null); setModalData({}); }}
-                                        className="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm flex items-center justify-center transition cursor-pointer"
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-
-                                {/* SPORT FORM */}
-                                {activeModal === 'add_sport' && (
-                                    <form onSubmit={handleSaveSport} className="space-y-4 mt-4">
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">ชื่อกีฬา</label>
-                                            <input
-                                                type="text"
-                                                required
-                                                value={modalData.name || ''}
-                                                onChange={(e) => setModalData({ ...modalData, name: e.target.value })}
-                                                placeholder="เช่น ฟุตบอล, บาสเกตบอล"
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">คำอธิบายรายละเอียด</label>
-                                            <textarea
-                                                rows="2"
-                                                value={modalData.description || ''}
-                                                onChange={(e) => setModalData({ ...modalData, description: e.target.value })}
-                                                placeholder="คำอธิบายเพิ่มเติม..."
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                            ></textarea>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <input
-                                                type="checkbox"
-                                                id="sport_active"
-                                                checked={modalData.active !== false}
-                                                onChange={(e) => setModalData({ ...modalData, active: e.target.checked })}
-                                                className="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-700 focus:ring-amber-500"
-                                            />
-                                            <label htmlFor="sport_active" className="text-xs text-slate-300 font-medium">เปิดใช้งานในการแข่งขัน</label>
-                                        </div>
-
-                                        <div className="flex justify-end gap-2 pt-4 border-t border-slate-700">
-                                            <button type="button" onClick={() => setActiveModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold">ยกเลิก</button>
-                                            <button type="submit" disabled={isSubmitting} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-600/20">บันทึกข้อมูล</button>
-                                        </div>
-                                    </form>
-                                )}
-
-                                {/* TEAM FORM */}
-                                {activeModal === 'add_team' && (
-                                    <form onSubmit={handleSaveTeam} className="space-y-4 mt-4">
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">ชื่อทีม</label>
-                                            <input
-                                                type="text"
-                                                required
-                                                value={modalData.name || ''}
-                                                onChange={(e) => setModalData({ ...modalData, name: e.target.value })}
-                                                placeholder="เช่น ทีมมังกรทอง"
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">ชื่อย่อทีม</label>
-                                            <input
-                                                type="text"
-                                                required
-                                                value={modalData.short_name || ''}
-                                                onChange={(e) => setModalData({ ...modalData, short_name: e.target.value })}
-                                                placeholder="เช่น TGT"
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">โลโก้ทีม (PNG, JPG, WEBP &lt; 10MB)</label>
-                                            <input
-                                                type="file"
-                                                accept="image/png, image/jpeg, image/webp"
-                                                onChange={(e) => handleFileUpload(e.target.files[0], (dataUrl) => setModalData({ ...modalData, logo: dataUrl }))}
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none"
-                                            />
-                                            {modalData.logo && (
-                                                <div className="mt-2 flex items-center gap-3 p-2 bg-slate-900 rounded-lg">
-                                                    <img src={modalData.logo} alt="Preview" className="w-10 h-10 object-contain rounded border border-slate-700" />
-                                                    <span className="text-xs text-emerald-400 font-medium">โหลดไฟล์โลโก้เรียบร้อย</span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div className="flex justify-end gap-2 pt-4 border-t border-slate-700">
-                                            <button type="button" onClick={() => setActiveModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold">ยกเลิก</button>
-                                            <button type="submit" disabled={isSubmitting} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-600/20">บันทึกข้อมูลทีม</button>
-                                        </div>
-                                    </form>
-                                )}
-
-                                {/* MATCH FORM */}
-                                {activeModal === 'add_match' && (
-                                    <form onSubmit={handleSaveMatch} className="space-y-4 mt-4">
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">ประเภทกีฬา</label>
-                                            <select
-                                                value={modalData.sport_id || ''}
-                                                onChange={(e) => setModalData({ ...modalData, sport_id: e.target.value })}
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none"
-                                            >
-                                                {sports.map(s => (
-                                                    <option key={s.id} value={s.id}>{s.name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">รอบการแข่งขัน</label>
-                                            <input
-                                                type="text"
-                                                value={modalData.round || ''}
-                                                onChange={(e) => setModalData({ ...modalData, round: e.target.value })}
-                                                placeholder="เช่น รอบชิงชนะเลิศ, รอบ 8 ทีม"
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none"
-                                            />
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div>
-                                                <label className="block text-xs text-slate-300 font-medium mb-1">ทีม A</label>
-                                                <select
-                                                    value={modalData.team_a_id || ''}
-                                                    onChange={(e) => setModalData({ ...modalData, team_a_id: e.target.value })}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none"
-                                                >
-                                                    {teams.map(t => (
-                                                        <option key={t.id} value={t.id}>{t.name}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-
-                                            <div>
-                                                <label className="block text-xs text-slate-300 font-medium mb-1">ทีม B</label>
-                                                <select
-                                                    value={modalData.team_b_id || ''}
-                                                    onChange={(e) => setModalData({ ...modalData, team_b_id: e.target.value })}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none"
-                                                >
-                                                    {teams.map(t => (
-                                                        <option key={t.id} value={t.id}>{t.name}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div>
-                                                <label className="block text-xs text-slate-300 font-medium mb-1">คะแนนทีม A</label>
-                                                <input
-                                                    type="number"
-                                                    value={modalData.score_a || 0}
-                                                    onChange={(e) => setModalData({ ...modalData, score_a: e.target.value })}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-amber-400 font-bold focus:outline-none"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs text-slate-300 font-medium mb-1">คะแนนทีม B</label>
-                                                <input
-                                                    type="number"
-                                                    value={modalData.score_b || 0}
-                                                    onChange={(e) => setModalData({ ...modalData, score_b: e.target.value })}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-amber-400 font-bold focus:outline-none"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">สถานะการแข่งขัน</label>
-                                            <select
-                                                value={modalData.status || 'ยังไม่เริ่ม'}
-                                                onChange={(e) => setModalData({ ...modalData, status: e.target.value })}
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none"
-                                            >
-                                                <option value="ยังไม่เริ่ม">ยังไม่เริ่ม</option>
-                                                <option value="กำลังแข่งขัน">🔴 กำลังแข่งขัน</option>
-                                                <option value="จบการแข่งขัน">จบการแข่งขัน</option>
-                                                <option value="ยกเลิก">ยกเลิก</option>
-                                            </select>
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs text-slate-300 font-medium mb-1">รูปภาพการแข่งขัน (PNG, JPG, WEBP &lt; 10MB)</label>
-                                            <input
-                                                type="file"
-                                                accept="image/png, image/jpeg, image/webp"
-                                                onChange={(e) => handleFileUpload(e.target.files[0], (dataUrl) => setModalData({ ...modalData, image: dataUrl }))}
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none"
-                                            />
-                                            {modalData.image && (
-                                                <div className="mt-2 flex items-center gap-3 p-2 bg-slate-900 rounded-lg">
-                                                    <img src={modalData.image} alt="Match Preview" className="w-16 h-12 object-cover rounded border border-slate-700" />
-                                                    <span className="text-xs text-emerald-400 font-medium">โหลดภาพถ่ายแมตช์เรียบร้อย</span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div className="flex justify-end gap-2 pt-4 border-t border-slate-700">
-                                            <button type="button" onClick={() => setActiveModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold">ยกเลิก</button>
-                                            <button type="submit" disabled={isSubmitting} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-600/20">บันทึกการแข่งขัน</button>
-                                        </div>
-                                    </form>
-                                )}
-
-                                {/* DELETE CONFIRMATION MODAL */}
-                                {activeModal === 'delete_confirm' && deleteTarget && (
-                                    <div className="space-y-4 mt-4">
-                                        <p className="text-sm text-slate-300">
-                                            คุณแน่ใจหรือไม่ว่าต้องการลบ <span className="text-amber-400 font-bold">"{deleteTarget.name}"</span>? 
-                                            การกระทำนี้จะไม่สามารถย้อนกลับได้
-                                        </p>
-
-                                        <div className="flex justify-end gap-2 pt-4 border-t border-slate-700">
-                                            <button type="button" onClick={() => setActiveModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold">ยกเลิก</button>
-                                            <button type="button" onClick={confirmDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-red-600/20">ยืนยันการลบ</button>
-                                        </div>
-                                    </div>
-                                )}
-
-                            </div>
-                        </div>
-                    )}
-
-                    {fullscreenImage && (
-                        <div className="fixed inset-0 z-50 bg-slate-950/95 flex flex-col items-center justify-between p-4 backdrop-blur-md animate-in fade-in duration-200">
-                            {/* Toolbar */}
-                            <div className="w-full max-w-5xl flex items-center justify-between z-10 bg-slate-900/80 p-3 rounded-2xl border border-slate-800">
-                                <span className="text-xs font-bold text-slate-300">🖼️ Fullscreen Image Viewer</span>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => setImageZoom(prev => Math.max(0.5, prev - 0.25))}
-                                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg transition"
-                                    >
-                                        🔍 -
-                                    </button>
-                                    <span className="text-xs font-mono text-amber-400 px-1">{Math.round(imageZoom * 100)}%</span>
-                                    <button
-                                        onClick={() => setImageZoom(prev => Math.min(3, prev + 0.25))}
-                                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg transition"
-                                    >
-                                        🔍 +
-                                    </button>
-                                    <button
-                                        onClick={() => setImageZoom(1)}
-                                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition"
-                                    >
-                                        รีเซ็ต
-                                    </button>
-                                    <a
-                                        href={fullscreenImage}
-                                        download="sports-match-photo.png"
-                                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition flex items-center gap-1"
-                                    >
-                                        <span>⬇️</span>
-                                        <span>ดาวน์โหลด</span>
-                                    </a>
-                                    <button
-                                        onClick={() => setFullscreenImage(null)}
-                                        className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg transition"
-                                    >
-                                        ✕ ปิด (ESC)
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Image Canvas Container */}
-                            <div className="flex-1 w-full max-w-5xl flex items-center justify-center overflow-auto p-4 my-2">
-                                <img
-                                    src={fullscreenImage}
-                                    alt="Match Fullscreen"
-                                    style={{ transform: `scale(${imageZoom})`, transition: 'transform 0.15s ease-out' }}
-                                    className="max-h-[80vh] max-w-full object-contain rounded-xl shadow-2xl border border-slate-800"
-                                />
-                            </div>
-
-                            <p className="text-xs text-slate-500">กดปุ่ม ESC บนคีย์บอร์ดหรือปุ่ม "ปิด" เพื่อออกจากโหมดเต็มจอ</p>
-                        </div>
-                    )}
-
-                    {/* Footer */}
-                    <footer className="bg-slate-950 border-t border-slate-800 py-6 text-center text-xs text-slate-500">
-                        <div className="max-w-7xl mx-auto px-4">
-                            ระบบรายงานผลการแข่งขันกีฬาแบบ Realtime &copy; {new Date().getFullYear()}
-                        </div>
-                    </footer>
-                </div>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TPS GAMES2027 SCORE</title>
+<meta name="referrer" content="no-referrer">
+<link href="https://fonts.googleapis.com/css2?family=Michroma&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#04060c;--panel:#0a1224;--line:#16306b;--blue:#1f6fff;--deep:#0a4aab;--ice:#8fbaff;--txt:#e8f0ff;--mut:#7f93bd;--red:#ff4d6d;--ok:#35d49a;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:radial-gradient(900px 500px at 15% -10%,#0b2a6b 0,transparent 60%),radial-gradient(700px 400px at 100% 100%,#07204f 0,transparent 55%),var(--bg);color:var(--txt);font:16px/1.5 Sarabun,system-ui,sans-serif;min-height:100vh}
+header{display:flex;align-items:center;gap:16px;padding:14px clamp(14px,4vw,40px);border-bottom:1px solid var(--line);background:rgba(4,6,12,.75);backdrop-filter:blur(8px);position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
+header img{height:54px;width:auto;filter:drop-shadow(0 0 10px rgba(31,111,255,.6))}
+.brand{font-family:Michroma,Sarabun,sans-serif;font-size:clamp(13px,2.4vw,22px);letter-spacing:.06em;line-height:1.2}
+.brand small{display:block;color:var(--ice);font-size:.55em;letter-spacing:.2em;margin-top:2px}
+.sp{flex:1}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--txt);padding:9px 16px;border-radius:10px;transition:.15s}
+button:hover{border-color:var(--blue);box-shadow:0 0 14px rgba(31,111,255,.35)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ice);outline-offset:2px}
+.pri{background:linear-gradient(135deg,var(--deep),var(--blue));border-color:var(--blue);font-weight:700}
+.dan{color:var(--red)}
+main{max-width:1100px;margin:0 auto;padding:26px clamp(14px,4vw,40px) 60px}
+h2{font-size:20px;margin:0 0 16px}
+.bar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.card{background:linear-gradient(160deg,#0b1a3a,#070d1c);border:1px solid var(--line);border-radius:16px;padding:16px;cursor:pointer;text-align:left}
+.card:hover{border-color:var(--blue)}
+.mn{display:flex;justify-content:space-between;gap:8px;color:var(--ice);font-size:14px;margin-bottom:12px}
+.st{font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}
+.st.live{color:var(--red);border-color:var(--red)}.st.done{color:var(--ok);border-color:var(--ok)}
+.row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}
+.tm{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;min-width:0}
+.tm b{font-size:15px;overflow-wrap:anywhere}
+.lg{width:56px;height:56px;border-radius:50%;object-fit:cover;background:#0d1d42;border:2px solid var(--line);display:grid;place-items:center;font-family:Michroma,sans-serif;color:var(--ice);overflow:hidden}
+.sc{font-family:Michroma,sans-serif;font-size:30px;white-space:nowrap}
+.sc i{color:var(--mut);font-style:normal;margin:0 6px}
+.big{background:linear-gradient(160deg,#0b1d45,#050913);border:1px solid var(--blue);border-radius:24px;padding:clamp(18px,4vw,44px);box-shadow:0 0 60px rgba(31,111,255,.25)}
+.big .mn{font-size:clamp(16px,3vw,24px);justify-content:center;flex-direction:column;align-items:center;text-align:center;gap:8px;margin-bottom:26px}
+.big .lg{width:clamp(80px,18vw,150px);height:clamp(80px,18vw,150px);font-size:30px}
+.big .tm b{font-size:clamp(17px,3.4vw,30px)}
+.big .num{font-family:Michroma,sans-serif;font-size:clamp(56px,16vw,150px);line-height:1;text-shadow:0 0 30px rgba(31,111,255,.7)}
+.big .row{grid-template-columns:1fr auto 1fr;gap:clamp(8px,3vw,30px)}
+.vs{color:var(--mut);font-family:Michroma,sans-serif}
+.ctl{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+.ctl button{padding:8px 14px;font-weight:700}
+.empty{border:1px dashed var(--line);border-radius:16px;padding:40px;text-align:center;color:var(--mut)}
+dialog{background:#08112a;color:var(--txt);border:1px solid var(--blue);border-radius:18px;padding:22px;width:min(520px,92vw);box-shadow:0 0 60px rgba(31,111,255,.35)}
+dialog::backdrop{background:rgba(0,0,0,.7)}
+label{display:block;font-size:14px;color:var(--ice);margin:12px 0 4px}
+input[type=text],input[type=password],select{width:100%;padding:10px 12px;background:#050a18;border:1px solid var(--line);border-radius:10px;color:var(--txt);font:inherit}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.up{display:flex;align-items:center;gap:10px;margin-top:6px}
+.up input{font-size:12px;max-width:150px}
+.msg{min-height:22px;margin-top:10px;color:var(--red);font-size:14px}
+.foot{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+.note{color:var(--mut);font-size:13px;margin-top:20px}
+@media(max-width:520px){.two{grid-template-columns:1fr}.brand{font-size:12px}header img{height:42px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<header>
+<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANcAAADcCAYAAADjujR2AAAOpklEQVR42u2deXcTRxZHfy3ZFl6wDcQBO8MSSJgwgSzz6eZbzUdhlkxCFvZgsEm821i2rJ4/3qsjIZAtyd2tXu49R0cHA5a6um69V9W1RP/4ZxwLABKnRhEAIBcAcgEAcgEgFwByAQByASAXAHIBAHIBIBcAcgEAcgEgFwByAQByASAXAHIBAHIBIBcAcgEAcgEgFwByAQByASAXAHIBAHIBIBcAcgEAcgEgFwByAQByASAXAHIBwABMpPR7Y0nH/h5RzLki9ka1nlDj2pbUKnBZRJKmiiRXS9IPkg5LLFfUc5OKlrFMeqValHRJ0uwQFXJX0oa/H3U1pEWUa0rSd2m4kGbkavqLyJVPDvz9rdeDy5JuSpo75f9sS3rm7yd9GpqiyZVaozCR4hePul6Q78jblrQuaUvS55JWPlIJn0t66VlJrUT99aiIckHxUsVjSb+4QDe6xPpN0u9eERkEG6JAAXqzjSeSVv1nz1ysGlkIkQuS4ZlHsJdIReSCZCPYsUcwHqcgFxSps49cAIBcAHkjzQGNVB/QjZCyxCX7/Lyle0WdoVG4h8iRpEaKv/tEw81nq/u1xgl9fts7/MP8n6kciXWUcKWqqbgjz5NFk2tC0v0UC2RV0tMB09q2pGVJtxL8/APZ3MnWAFEgljTj5VHPSWv9L0nvEopgbdn8xHtkcNlFrqkcFUY94e/TGqE8Gjnq4yadFtZyFJlzAwMa2fUv4gJ/d0AuAOQCQC4AQC4A5AJALgBALgDkoqzHTVSQ31l4WImcDS3ZLkt5ECzW+zs3JSFWU9IfOSrvsDfjtGxmTB25ykmofD/m7DtFCf6uPdlcyzxmCzOybeOWXTbkKqlkXF/2EWxP0o6k15KuS/pLVhkEfS6oQqNWly0R+s0ziGPkAkhesnVJPymD/e2RC85Kq8pGXTb48mva14dccFpLP1vSa6tLWlPKI5zIBf0iVljgGZf4Gl/IVlIjF2RW6SZlp51EskMZJkooWU12BNJ2Wh/AUDx00/ZU8CtJF9UZXr8i6WfZ87oyNcixpE3Z+WRELkilgoXU6KqkbyTN6/3nVlf855e7/n1ZItleWtdC5Mo2KowyqCB9eIplnJBUYWOZeUmfndGCz7lgf8h239pVfo/mrQ1RvkdpXQNyZRMZpjwq1Aa42eEmn8iOvd33V5ChIemCp231c3ynSdl0oIsafI/JSNKSvw681T/UYFvMZcWJbDbGoI3Zkf/bGnIVkylJtweogE2vsJv+/s7v0ZJHl4uyuXJ52MZsxl9540Q2zH4ybuGRK9u0sDfSHLtEG7L5b++8BZ3zfs6iRxfuU7rpN3IVnJqnY/uy4d8/PbWKZSN0lyR9gUzlgZuYDS3ZpNEd76NMeVRa8XSP3WqRC0YgjEjtS/rUI9SMeAyCXHBuQtr3QPk4iAEy7AfAaNEIynEfW0ppChRyDU9b9gCVAw3KwYnsOKqTpH8xaeHg7MlmJ6zLnke1iWCl6Ro1Jb2RzVJBroxoyYbM33i0aki6Jhsu/1n5mpkAo/WHJ2UDTa9lm9jUkCv9KLXmUaot6RNJNyQteOEfVKTiVaEvHPv9DQ3oAnKlk3uHKLUtGy6/4QXfKEHFG4amR+ai9omHnfo07a8t5Eq+Iq17WnDkMj3wQq5qyteWTckqaiMyTGo35anhjOxZJH2uBDiQ9Eq2E25dNmv9mmzGOXSma5U99Q2zYxqyCdPIdQ52JP3uLfO0pDuySbJE8Woyn1a6X5UKFZZzv/BO67ykr7sGKKCa1L1hDUTINXx688Zfl9VZxg7VJowCh+3jDpPuElRBrjC370vZOimA2Ov+TY9Wsct1OelWvQoFuYBY0FMnbnVlMEeyAa5EM5oq9bkAwuY+N2SnnQS2vf81h1wAo/Wx6i7WrZ6/W5ctXp0oq1xrsoWEg6zKjYaISGlFrXiIzy9i5Czq9+4n1SWXarHn78Ouuw+S/uA8ybUqe5A3iFxhVnpDZw+fprFtViR7qj/ICY1xATOEcH1FlivyurQgG26/1OdevZTtqjVfVrkOvAXZ+kjL0s2hpCeyB8C3ZLMq6gNU7smEv+8FSd8O8e9rKtYq5Iak7wvet6q7XKc1frtelx6k8SXyIlfYvXXnlMJ642LNaPzPqsJh1mUlKvn1hTr12KPaQpnl2vAbuuspX6MnqoWdk27KRnlYQwXn5ZXXrXtptsDjpuXiRB69trtalleSHvqfv5cdGI1YkESm9FQ2r7SR1ofkIXK99hak5oMPq56SvHDRbstWiAIkwbGkR95fv5rmB02M8QJ3ZXtSvO6KoDUX6qFHqL/p/YmVAOftZ/3igx230/6wrOQ6ke2DvuUp4LZOP10ibP7yyAcwFmSjiLNphnEoPU+87n2fRd3PSq6mbA3VlksWzkPq138Kkymb/tp3KVdkm4kADMsLz5K+UUYjoVnJNSM7CrQl2/xl20Xb9xSxN3RHsnleC7KHf3NihTCMzktJz70OZvYIJ+s+14Snd4uyYfUnkp6p84A1zGa4IzuTaqLr5+2S3fBBZnf06zdUdSLyKGX20uvYV16nVFa5uivIc9mD4Zv+Ho4AvS4bxfm3p4Rlpe4RfV62jmh2wP+36mVXxRXUk94wL2uwg/dedEWspay/7LjkeiybqHvPK9aOp4lh2XU4svRQ5X6utSebkT3h5XB9gLTl2PutVTzU4dC7FGuy0b5rpzTeT7zRvidbcayyy9WWjQBuSbqvzrSTRdksjVlvkU66UoAyy9V9/vG6l8F12bKI2hmpUVUfptdlI80/eX1a6fn7lmy4Pcx0H9s0uVrGYv0oe771nd6fz3XJv0vYMKZqfYrIrzscCvCjPhzogQ8bmKcexbsj239kA2Xfacx7pWQlV+wtzb63Jr358qxsNHCBSqOaR7FHKt8gTtJl1ZQNr8uzoYfeL/tWOZh4XMtIrDDx9ps+HdFJj17sytRJff7wvilbFJwu2KZsRPAH2UDYfeXkGNws+lzPvSW+f0ZrclPMvuht+F55o/MJxdG3jPa8D/ZXjWFEcJyR6623KvcGSPmmxQadH4v6z5TCwWwlYsK7Gkt5ND8t9mSjNp8r4f3gKtgyb1AUH6Xt3Yy5vN68NDiRHUFzRe9vYQWjRa81iqEvuV01kZZcIZW5w71PpNMe+hXwftSaVf8HyaWUa8c74neU/MYwVZUrrA6ATjSfkHRXORkZ7NcZTPqin3rn8rzhuq1yHuo9yuyKsJf5RXUmMRepXGoJ17GabO//xTxfdNJybXoK8/cEbsaip0JRycQK69NGEUyyUdUrKs7IauTZTBKHswex7uY5HUxDrlg2C/lTnf/p+IRsiX8ZWZNNbxq1oqW+90PCrMpmT1RKrKTD9a5Hrc/oEoDzVjbLpF01sZKWa937BDPUKXCxHqmzwuE8YkVFEytJudre32J/C0harJpsatO1ohVCUnIdeoeVibeQtFh3iyhWknLtyWZyT1O3EAuxjKRGC5v+u5h4W13WZVPeECvhyMWaI8RCrJTkgmqngkmJFZVFrCTTwjrRiz4WESsduaZlG6q0xCHmVaDlqeBjxEpfrlkvpF3ZsnQoH7FsTuS6bH+PA/85YqUsV0O2GnQduc6kaBORj1ymNdk2ZkcJXUf3A+KrZbzRSaZwy7Jl/b3HrqbJoewZ2763pEXYa6JZAMHCaZ9rspk3kQuwIDutJk5IrLtlFStpuS7L9h587oWWJtuyBZlbKt4iwrzultv2tP6tpD9dsEXZuqnLXtZhl1tGBTOWqybbjOa/svVGaext0JQtxlzv6khX5XHCVEpC7bhMG57yzcr2PfmkKwPZcLFaoo81Frnk/a0bsuHZb5Xsrjw7/nv3/QZVRarYxUpqatmJl+WGS3XsQi17g9j7Oe+83JMSq7R9rLTlkmxzz0OPYA8SEmxDnf3Tq/bgO/YyPE/kanoqveHvJ7KlQSt9hOpm1e9n/ZzXUHexKrNyIg25Qj79i2xT/K90vn0L92QzAKooVmBpyKjRlg3wbKqz9UJNtt7upvelBjmps+XRrXZOsWpVEystudSVV4cTO677a9ib1JbtM1/V86hijzCDbGd96AMSm572NT3aLXof6qKG342rqfNt6VZZsdKUKwh2R7bG67G3gLc13I49r72yVFGsUDlv9JHiyCPSlpdR08t8zvtPiy5mNMbvXqk+VpZydac0C7KNQn/wQY9BTlBseb5f1UPe2i7Jsjpbq+27TLv+Z7lAoYxnlI+9IisvVlZyydOTMPz6zAc7FvzPl/pEpk2NtgVZWSLWlGwo/Ge9vzXZrPdh5z1KTebwu9dV8gfEeZIrMC87o2vXo9KvfiOWvF8x0yXahjoPHKsWsWp+3X+6QCtedtPK/8To2BvOSoulMd6oi54yhHlr696/Cqe1L3p/oopSrXhDM+uRq4iNSyQYeys45ZVpRTZ0vO2t9RPvU5R16D3uea97qnddHLeEXCkw469lF+2h9zOSbEGjUyr6WT/rJ0bv744GEGvShWp4FF/ytI8WH7ky+V512YPjaAShQorV8MocTsX42CyHw4+IcqTOLrHd0kQuxoS/h1ej6zXIAEPdv98kQiFXUVKtedmztaMuMZs6fSnKXE8Fj2WzF0JKesH/PghV63ohBlRGrkmdffYyQCaw+xMAcgEgFwAgFwByASAXACAXAHIBIBcAlFYupiNBbpgomVhN2fqwMh5nNK/stgkH5PpArj1J/yuhXLGkr1XBHZSQi/QQoPR9LgDkAkAuAEAuAOQCQC4AQC4A5AJALgBALoD8kefpT23ZZp5MZersGjwOToa8D211ditGrpx+ry91+k65VWMcm502ZGdax0M2BBe4XfmVqyY7nADGXz+uUgz0uQCQCwC5AAC5AJALALkAALkAkAsAuQAAuQCQCwC5AAC5AJALALkAALkAkAsAuQAAuQCQCwC5AAC5AJALALkAALkAkAsAuQAAuQCQCwC5AAC5AJALAJALALkAkAsAkAsAuQCQCwCQCwC5AJALAJALALkACsr/AS4KDFnxZA0AAAAAAElFTkSuQmCC" alt="TPS27">
+<div class="brand">TPS GAMES2027 SCORE<small>LIVE SCOREBOARD</small></div>
+<div class="sp"></div>
+<span id="who" class="st" hidden>แอดมิน</span>
+<button id="admBtn">เข้าสู่ระบบแอดมิน</button>
+</header>
+<main id="app"></main>
+
+<dialog id="dLogin"><h2>เข้าสู่ระบบแอดมิน</h2>
+<label for="pw">รหัสผ่านแอดมิน</label>
+<input id="pw" type="password" autocomplete="off" maxlength="64">
+<div class="msg" id="lmsg" role="alert"></div>
+<div class="foot"><button id="lCancel">ยกเลิก</button><button class="pri" id="lOk">เข้าสู่ระบบ</button></div></dialog>
+
+<dialog id="dEdit"><h2 id="eTitle">สร้างตัวนับคะแนนใหม่</h2>
+<label for="eName">ชื่อแมตช์</label><input id="eName" type="text" maxlength="60" placeholder="เช่น รอบชิงชนะเลิศ ฟุตบอล">
+<label for="eSt">สถานะ</label>
+<select id="eSt"><option value="up">กำลังจะแข่ง</option><option value="live">กำลังแข่ง</option><option value="done">จบแล้ว</option></select>
+<div class="two">
+<div><label for="aN">ชื่อทีม A</label><input id="aN" type="text" maxlength="30" value="ทีม A">
+<div class="up"><img class="lg" id="aP" alt=""><input id="aF" type="file" accept="image/png,image/jpeg,image/webp" aria-label="โลโก้ทีม A"></div></div>
+<div><label for="bN">ชื่อทีม B</label><input id="bN" type="text" maxlength="30" value="ทีม B">
+<div class="up"><img class="lg" id="bP" alt=""><input id="bF" type="file" accept="image/png,image/jpeg,image/webp" aria-label="โลโก้ทีม B"></div></div>
+</div>
+<div class="msg" id="emsg" role="alert"></div>
+<div class="foot"><button id="eCancel">ยกเลิก</button><button class="pri" id="eOk">บันทึก</button></div></dialog>
+
+<script type="application/json" id="seed">[]</script>
+<script>
+(()=>{
+const HASH="68f06a8418a8e03cfb341cd6bd819c2cfcf39dc2c4df5653459dd22b2fa9f4e3";
+const $=s=>document.querySelector(s);
+const ST={up:"กำลังจะแข่ง",live:"กำลังแข่ง",done:"จบแล้ว"};
+let art=null,pt=null,matches=[],openId=null,admin=false,idle=null,editId=null,logos={a:"",b:""};
+const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+const clamp=n=>Math.max(0,Math.min(999,n|0));
+const safeImg=u=>typeof u==="string"&&/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+\/=]+$/.test(u)&&u.length<90000?u:"";
+
+/* ---------- security: hashed password, lockout, auto-lock ---------- */
+async function sha(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+let fails=0,lockUntil=0;
+try{fails=+sessionStorage.getItem("tpsF")||0;lockUntil=+sessionStorage.getItem("tpsL")||0}catch(e){}
+function setAdmin(v){admin=v;try{v?sessionStorage.setItem("tpsA",Date.now()+9e5):sessionStorage.removeItem("tpsA")}catch(e){}$("#who").hidden=!v;$("#admBtn").textContent=v?"ออกจากระบบ":"เข้าสู่ระบบแอดมิน";bump();render()}
+function bump(){clearTimeout(idle);if(admin){try{sessionStorage.setItem("tpsA",Date.now()+9e5)}catch(e){}}if(admin)idle=setTimeout(()=>setAdmin(false),15*60*1000)}
+["click","keydown","touchstart"].forEach(e=>addEventListener(e,()=>admin&&bump(),{passive:true}));
+$("#admBtn").onclick=()=>{if(admin)return setAdmin(false);$("#pw").value="";$("#lmsg").textContent="";$("#dLogin").showModal();$("#pw").focus()};
+$("#lCancel").onclick=()=>$("#dLogin").close();
+async function login(){
+ const w=lockUntil-Date.now();
+ if(w>0){$("#lmsg").textContent="ลองผิดหลายครั้ง กรุณารออีก "+Math.ceil(w/1000)+" วินาที";return}
+ const ok=(await sha($("#pw").value))===HASH;$("#pw").value="";
+ if(ok){fails=0;try{sessionStorage.removeItem("tpsF");sessionStorage.removeItem("tpsL")}catch(e){}$("#dLogin").close();setAdmin(true);return}
+ fails++;if(fails>=3)lockUntil=Date.now()+Math.min(300,Math.pow(2,fails-2)*5)*1000;
+ try{sessionStorage.setItem("tpsF",fails);sessionStorage.setItem("tpsL",lockUntil)}catch(e){}
+ $("#lmsg").textContent="รหัสผ่านไม่ถูกต้อง"+(fails>=3?" (ล็อกชั่วคราว)":"");
+}
+$("#lOk").onclick=login;$("#pw").addEventListener("keydown",e=>e.key==="Enter"&&login());
+
+/* ---------- data ---------- */
+function buildDoc(){
+ const c=document.documentElement.cloneNode(true);
+ c.querySelector("#app").replaceChildren();
+ c.querySelectorAll("dialog").forEach(d=>d.removeAttribute("open"));
+ c.querySelectorAll("dialog img").forEach(i=>i.removeAttribute("src"));
+ c.querySelector("#who").setAttribute("hidden","");c.querySelector("#admBtn").textContent="เข้าสู่ระบบแอดมิน";
+ c.querySelector("#seed").textContent=JSON.stringify(matches).replace(/</g,"\\u003c");
+ return "<!DOCTYPE html>\n"+c.outerHTML;
+}
+function persist(){if(!admin)return;clearTimeout(pt);pt=setTimeout(doPub,700)}
+async function doPub(){
+ if(!art){alert("ยังเชื่อมต่อระบบเผยแพร่ไม่ได้ ต้องเปิดจากบัญชีเจ้าของหน้านี้");return}
+ try{await art.publish(buildDoc())}catch(e){if(!e||e.code!=="conflict")alert("บันทึกไม่สำเร็จ: บัญชีนี้ไม่มีสิทธิ์แก้ไข หรือการเชื่อมต่อขัดข้อง")}
+}
+function save(id,patch){
+ if(!admin)return;const m=matches.find(x=>x.id===id);if(!m)return;
+ Object.assign(m,patch);render();persist();
+}
+function add(m,k,d){const v=clamp(m[k+"S"]+d);save(m.id,{[k+"S"]:v})}
+
+/* ---------- views ---------- */
+function team(m,k,big){
+ const t=el("div","tm"),u=safeImg(m[k+"L"]);
+ let l;if(u){l=el("img","lg");l.src=u;l.alt=""}else l=el("div","lg",(m[k+"N"]||"?").trim().charAt(0).toUpperCase());
+ t.append(l,el("b","",m[k+"N"]));return t;
+}
+function scoreRow(m,big){
+ const r=el("div","row");
+ if(big){
+  const mk=k=>{const w=el("div");w.style.textAlign="center";const t=team(m,k,1);const n=el("div","num",m[k+"S"]);w.append(t,n);
+   if(admin){const c=el("div","ctl");[[-1,"−1"],[1,"+1"],[2,"+2"],[3,"+3"]].forEach(([d,x])=>{const b=el("button",d<0?"dan":"pri",x);b.onclick=()=>add(m,k,d);c.append(b)});w.append(c)}return w};
+  r.append(mk("a"),el("div","vs","VS"),mk("b"));
+ }else{r.append(team(m,"a"));const s=el("div","sc");s.append(String(m.aS),el("i","","-"),String(m.bS));r.append(s,team(m,"b"))}
+ return r;
+}
+function head(m){const h=el("div","mn");const s=el("span","st "+m.st,ST[m.st]||"");h.append(el("span","",m.name),s);return h}
+function render(){
+ const app=$("#app");app.replaceChildren();
+  const m=matches.find(x=>x.id===openId);
+ if(openId&&!m)openId=null;
+ if(m){
+  const bar=el("div","bar"),back=el("button","","← กลับ");back.onclick=()=>{openId=null;try{sessionStorage.removeItem("tpsO")}catch(e){}render()};bar.append(back,el("div","sp"));
+  if(admin){
+   const e=el("button","","แก้ไขแมตช์"),rs=el("button","","รีเซ็ตคะแนน"),sw=el("button","","สลับทีม"),d=el("button","dan","ลบ");
+   e.onclick=()=>openEdit(m);
+   rs.onclick=()=>confirm("รีเซ็ตคะแนนเป็น 0 - 0 ?")&&save(m.id,{aS:0,bS:0});
+   sw.onclick=()=>save(m.id,{aN:m.bN,aL:m.bL,aS:m.bS,bN:m.aN,bL:m.aL,bS:m.aS});
+   d.onclick=()=>{if(confirm("ลบตัวนับคะแนนนี้ถาวร?")&&admin){matches=matches.filter(x=>x.id!==m.id);openId=null;render();persist()}};
+   bar.append(e,sw,rs,d);
+  }
+  const big=el("div","big");big.append(head(m),scoreRow(m,1));app.append(bar,big);return;
+ }
+ const bar=el("div","bar");bar.append(el("h2","","รายการแข่งขัน"),el("div","sp"));
+ if(admin){const n=el("button","pri","+ สร้างตัวนับคะแนนใหม่");n.onclick=()=>openEdit(null);bar.append(n)}
+ app.append(bar);
+ if(!matches.length){app.append(el("div","empty",admin?"ยังไม่มีแมตช์ กดสร้างตัวนับคะแนนใหม่ได้เลย":"ยังไม่มีแมตช์ในขณะนี้"));return}
+ const g=el("div","grid");
+ matches.forEach(x=>{const c=el("div","card");c.tabIndex=0;c.setAttribute("role","button");c.append(head(x),scoreRow(x));
+  const go=()=>{openId=x.id;try{sessionStorage.setItem("tpsO",x.id)}catch(e){}render()};c.onclick=go;c.onkeydown=e=>(e.key==="Enter"||e.key===" ")&&go();g.append(c)});
+ app.append(g);
+}
+
+/* ---------- editor ---------- */
+function prev(k){const p=$("#"+k+"P"),u=safeImg(logos[k]);if(u)p.src=u;else p.removeAttribute("src")}
+function shrink(file){return new Promise((ok,no)=>{
+ if(!/^image\/(png|jpeg|webp)$/.test(file.type)||file.size>8e6)return no();
+ const u=URL.createObjectURL(file),i=new Image();
+ i.onload=()=>{const s=160,c=document.createElement("canvas");c.width=c.height=s;const x=c.getContext("2d");
+  const r=Math.max(s/i.width,s/i.height),w=i.width*r,h=i.height*r;x.drawImage(i,(s-w)/2,(s-h)/2,w,h);URL.revokeObjectURL(u);ok(c.toDataURL("image/webp",.85))};
+ i.onerror=no;i.src=u})}
+["a","b"].forEach(k=>$("#"+k+"F").onchange=async e=>{const f=e.target.files[0];if(!f)return;
+ try{logos[k]=await shrink(f);prev(k);$("#emsg").textContent=""}catch(x){$("#emsg").textContent="ไฟล์โลโก้ต้องเป็น PNG, JPG หรือ WebP ขนาดไม่เกิน 8 MB"}});
+function openEdit(m){
+ if(!admin)return;editId=m?m.id:null;
+ $("#eTitle").textContent=m?"แก้ไขแมตช์":"สร้างตัวนับคะแนนใหม่";
+ $("#eName").value=m?m.name:"";$("#eSt").value=m?m.st:"up";
+ $("#aN").value=m?m.aN:"ทีม A";$("#bN").value=m?m.bN:"ทีม B";
+ logos={a:m?m.aL:"",b:m?m.bL:""};$("#aF").value=$("#bF").value="";prev("a");prev("b");$("#emsg").textContent="";$("#dEdit").showModal();
+}
+$("#eCancel").onclick=()=>$("#dEdit").close();
+$("#eOk").onclick=async()=>{
+ if(!admin)return;
+ const name=$("#eName").value.trim().slice(0,60),aN=$("#aN").value.trim().slice(0,30),bN=$("#bN").value.trim().slice(0,30);
+ if(!name||!aN||!bN){$("#emsg").textContent="กรุณากรอกชื่อแมตช์และชื่อทีมให้ครบ";return}
+ const d={name,st:$("#eSt").value,aN,bN,aL:safeImg(logos.a),bL:safeImg(logos.b),t:Date.now()};
+ if(editId){const m=matches.find(x=>x.id===editId);if(m)Object.assign(m,d)}
+ else{const id="m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);matches.unshift(Object.assign(d,{id,aS:0,bS:0,c:Date.now()}));openId=id;try{sessionStorage.setItem("tpsO",id)}catch(e){}}
+ $("#dEdit").close();render();persist();
+};
+
+/* ---------- boot ---------- */
+try{
+ const raw=JSON.parse($("#seed").textContent||"[]");
+ matches=(Array.isArray(raw)?raw:[]).map(x=>({id:String(x.id||""),name:String(x.name||""),st:ST[x.st]?x.st:"up",aN:String(x.aN||""),bN:String(x.bN||""),aL:x.aL||"",bL:x.bL||"",aS:clamp(+x.aS),bS:clamp(+x.bS),c:+x.c||0}));
+}catch(e){matches=[]}
+try{if((+sessionStorage.getItem("tpsA")||0)>Date.now()){admin=true;$("#who").hidden=false;$("#admBtn").textContent="ออกจากระบบ";bump();const o=sessionStorage.getItem("tpsO");if(o&&matches.some(x=>x.id===o))openId=o}else{const o=sessionStorage.getItem("tpsO");if(o&&matches.some(x=>x.id===o))openId=o}}catch(e){}
+render();
+(async()=>{try{art=await claude.use("artifact")}catch(e){art=null}})();
+})();
+</script></body></html>
