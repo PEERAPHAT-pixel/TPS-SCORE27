@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="th"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TPS GAMES2027 SCORE</title>
